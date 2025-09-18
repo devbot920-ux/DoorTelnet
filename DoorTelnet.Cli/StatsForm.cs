@@ -472,10 +472,22 @@ public class StatsForm : Form
         
         MessageBox.Show(sb.ToString(), "Active Combats", MessageBoxButtons.OK, MessageBoxIcon.Information);
     }
-    
+
     private void InitializeForm()
     {
-        if (_combatTracker == null)
+        Text = "DoorTelnet Stats";
+        Size = new Size(1200, 800);
+        StartPosition = FormStartPosition.CenterScreen;
+        Icon = SystemIcons.Application;
+        
+        _statusStrip.Items.Add(_statusLabel);
+        _statusStrip.Items.Add(new ToolStripStatusLabel { Spring = true });
+        _statusStrip.Items.Add(_playerStatusLabel);
+        _statusLabel.Text = "Ready";
+        _playerStatusLabel.Text = "No player data";
+    }
+
+    private void SetupMenus()
     {
         var fileMenu = new ToolStripMenuItem("&File");
         fileMenu.DropDownItems.Add(new ToolStripMenuItem("&Disconnect", null, (s, e) => RequestDisconnect()) 
@@ -502,7 +514,7 @@ public class StatsForm : Form
             ShortcutKeys = Keys.Alt | Keys.F4 
         });
 
-        var combatMenu = new ToolStripMenuItem("&Combat"); // Add combat menu
+        var combatMenu = new ToolStripMenuItem("&Combat");
         combatMenu.DropDownItems.Add(new ToolStripMenuItem("&Clear Combat History", null, (s, e) => ClearCombatHistory()) 
         { 
             ShortcutKeys = Keys.Control | Keys.Shift | Keys.C 
@@ -561,14 +573,8 @@ public class StatsForm : Form
         viewMenu.DropDownItems.Add(new ToolStripMenuItem("&Fix Docking Issues", null, FixDockingIssues));
 
         _menuStrip.Items.AddRange(new ToolStripItem[] { fileMenu, combatMenu, debugMenu, viewMenu });
-        
-        _statusStrip.Items.Add(_statusLabel);
-        _statusStrip.Items.Add(new ToolStripStatusLabel { Spring = true });
-        _statusStrip.Items.Add(_playerStatusLabel);
-        _statusLabel.Text = "Ready";
-        _playerStatusLabel.Text = "No player data";
     }
-
+    
     private void SetupLayout()
     {
         SuspendLayout();

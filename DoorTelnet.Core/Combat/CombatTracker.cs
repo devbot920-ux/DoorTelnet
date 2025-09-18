@@ -564,6 +564,151 @@ public class CombatTracker
             CombatUpdated?.Invoke(combat);
         }
     }
+    
+    /// <summary>
+    /// Assign experience to recent combats that are awaiting experience
+    /// </summary>
+    private void AssignExperienceToRecentCombats(int experience)
+    {
+        lock (_sync)
+        {
+            // Find combats that are awaiting experience and are recent enough
+            var now = DateTime.UtcNow;
+            var eligibleCombats = _combatsAwaitingExperience
+                .Where(c => c.AwaitingExperience && 
+                           c.DeathTime.HasValue && 
+                           (now - c.DeathTime.Value) <= _experienceTimeout)
+                .OrderBy(c => c.DeathTime)
+                .ToList();
+            
+            if (eligibleCombats.Count == 0)
+                return;
+            
+            // Assign experience to the most recent combat
+            var targetCombat = eligibleCombats.Last();
+            var completedEntry = targetCombat.Complete("Victory", experience);
+            
+            _completedCombats.Add(completedEntry);
+            _combatsAwaitingExperience.Remove(targetCombat);
+            
+            CombatCompleted?.Invoke(completedEntry);
+        }
+    }
+    
+    /// <summary>
+    /// Normalize monster names for consistent tracking
+    /// </summary>
+    private string NormalizeMonsterName(string name)
+    {
+        if (string.IsNullOrWhiteSpace(name))
+            return "unknown";
+        
+        var normalized = name.Trim();
+        
+        // Remove common articles and prefixes
+        var prefixes = new[] { "a ", "an ", "the ", "some " };
+        foreach (var prefix in prefixes)
+        {
+            if (normalized.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+            {
+                normalized = normalized.Substring(prefix.Length);
+                break;
+            }
+        }
+        
+        // Remove trailing punctuation
+        normalized = normalized.TrimEnd('.', '!', '?', ',');
+        
+        // Convert to title case for consistency
+        if (normalized.Length > 0)
+        {
+            normalized = char.ToUpperInvariant(normalized[0]) + 
+                        (normalized.Length > 1 ? normalized.Substring(1).ToLowerInvariant() : "");
+        }
+        
+        return normalized;
+    }
+    
+    /// <summary>
+    /// Get combat statistics summary
+    /// </summary>
+    public CombatStatistics GetStatistics()
+    {
+        lock (_sync)
+        {
+            var completed = _completedCombats.Where(c => c.IsCompleted).ToList();
+            
+            return new CombatStatistics
+            {
+                TotalCombats = completed.Count,
+                TotalExperience = completed.Sum(c => c.ExperienceGained),
+                TotalDamageDealt = completed.Sum(c => c.DamageDealt),
+                TotalDamageTaken = completed.Sum(c => c.DamageTaken),
+                AverageDamageDealt = completed.Count > 0 ? completed.Average(c => c.DamageDealt) : 0,
+                AverageDamageTaken = completed.Count > 0 ? completed.Average(c => c.DamageTaken) : 0,
+                AverageExperience = completed.Count > 0 ? completed.Average(c => c.ExperienceGained) : 0,
+                AverageDuration = completed.Count > 0 ? completed.Average(c => c.DurationSeconds) : 0,
+                Victories = completed.Count(c => c.Status == "Victory"),
+                Deaths = completed.Count(c => c.Status == "Death"),
+                Flees = completed.Count(c => c.Status == "Fled")
+            };
+        }
+    }
+    
+    /// <summary>
+    /// Clear all combat history
+    /// </summary>
+    public void ClearHistory()
+    {
+        lock (_sync)
+        {
+            _completedCombats.Clear();
+            _activeCombats.Clear();
+            _combatsAwaitingExperience.Clear();
+        }
+    }
+    
+    /// <summary>
+    /// Clean up stale combats that have timed out
+    /// </summary>
+    public void CleanupStaleCombats()
+    {
+        lock (_sync)
+        {
+            var now = DateTime.UtcNow;
+            
+            // Clean up stale active combats
+            var staleCombats = _activeCombats.Values.Where(c => c.IsStale(_combatTimeout)).ToList();
+            foreach (var combat in staleCombats)
+            {
+                var entry = combat.Complete("Timeout");
+                _completedCombats.Add(entry);
+                _activeCombats.Remove(combat.MonsterName);
+                CombatCompleted?.Invoke(entry);
+            }
+            
+            // Clean up combats that have been waiting too long for experience
+            var staleAwaitingExp = _combatsAwaitingExperience
+                .Where(c => c.DeathTime.HasValue && (now - c.DeathTime.Value) > _experienceTimeout)
+                .ToList();
+            
+            foreach (var combat in staleAwaitingExp)
+            {
+                var entry = combat.Complete("Victory", 0); // No experience gained
+                _completedCombats.Add(entry);
+                _combatsAwaitingExperience.Remove(combat);
+                CombatCompleted?.Invoke(entry);
+            }
+        }
+    }
+    
+    /// <summary>
+    /// Mark a combat as ended when a monster dies (public method for external integration)
+    /// </summary>
+    public void MarkCombatEnded(string monsterName)
+    {
+        ProcessMonsterDeath(new List<string> { monsterName });
+    }
 }
 
 /// <summary>
