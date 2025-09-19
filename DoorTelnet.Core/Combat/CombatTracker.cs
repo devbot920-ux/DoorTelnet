@@ -592,7 +592,7 @@ public class CombatTracker
                 // Experience gained = difference in current experience
                 experienceGained = current - _lastCurrentExperience;
                 
-                // Sanity check - if gain seems too large or negative, use left field difference
+                // Sanity check - if gain seems to large or negative, use left field difference
                 if (experienceGained <= 0 || experienceGained > 10000)
                 {
                     // Alternative calculation using "left" field
@@ -666,31 +666,18 @@ public class CombatTracker
     {
         lock (_sync)
         {
-            // Use the target as-is if it came from room matching, otherwise normalize
-            var normalizedTarget = target;
-            var isRoomEntity = false;
+            // Always resolve to exact room monster name for consistent tracking
+            var resolvedTarget = ResolveToRoomMonsterName(target);
             
-            if (_roomTracker?.CurrentRoom?.Monsters != null)
-            {
-                // Check if target matches any monster in the room
-                isRoomEntity = _roomTracker.CurrentRoom.Monsters.Any(m => 
-                    m.Name?.Replace(" (summoned)", "").Equals(target, StringComparison.OrdinalIgnoreCase) == true);
-            }
-            
-            if (!isRoomEntity)
-            {
-                normalizedTarget = NormalizeMonsterName(target);
-            }
-            
-            if (!_activeCombats.TryGetValue(normalizedTarget, out var combat))
+            if (!_activeCombats.TryGetValue(resolvedTarget, out var combat))
             {
                 combat = new ActiveCombat
                 {
-                    MonsterName = normalizedTarget,
+                    MonsterName = resolvedTarget,
                     StartTime = DateTime.UtcNow,
                     LastDamageTime = DateTime.UtcNow
                 };
-                _activeCombats[normalizedTarget] = combat;
+                _activeCombats[resolvedTarget] = combat;
                 CombatStarted?.Invoke(combat);
             }
             
@@ -707,31 +694,18 @@ public class CombatTracker
     {
         lock (_sync)
         {
-            // Use the monster name as-is if it came from room matching, otherwise normalize
-            var normalizedMonster = monster;
-            var isRoomEntity = false;
+            // Always resolve to exact room monster name for consistent tracking
+            var resolvedMonster = ResolveToRoomMonsterName(monster);
             
-            if (_roomTracker?.CurrentRoom?.Monsters != null)
-            {
-                // Check if monster matches any monster in the room
-                isRoomEntity = _roomTracker.CurrentRoom.Monsters.Any(m => 
-                    m.Name?.Replace(" (summoned)", "").Equals(monster, StringComparison.OrdinalIgnoreCase) == true);
-            }
-            
-            if (!isRoomEntity)
-            {
-                normalizedMonster = NormalizeMonsterName(monster);
-            }
-            
-            if (!_activeCombats.TryGetValue(normalizedMonster, out var combat))
+            if (!_activeCombats.TryGetValue(resolvedMonster, out var combat))
             {
                 combat = new ActiveCombat
                 {
-                    MonsterName = normalizedMonster,
+                    MonsterName = resolvedMonster,
                     StartTime = DateTime.UtcNow,
                     LastDamageTime = DateTime.UtcNow
                 };
-                _activeCombats[normalizedMonster] = combat;
+                _activeCombats[resolvedMonster] = combat;
                 CombatStarted?.Invoke(combat);
             }
             
@@ -894,6 +868,80 @@ public class CombatTracker
     public void MarkCombatEnded(string monsterName)
     {
         ProcessMonsterDeath(new List<string> { monsterName });
+    }
+    
+    /// <summary>
+    /// Find and return the exact room monster name that matches any given monster reference
+    /// This ensures all combat tracking uses consistent room-based monster names
+    /// </summary>
+    private string ResolveToRoomMonsterName(string monsterReference)
+    {
+        var currentRoom = _roomTracker?.CurrentRoom;
+        if (currentRoom?.Monsters == null || currentRoom.Monsters.Count == 0)
+            return NormalizeMonsterName(monsterReference);
+        
+        // Check monsters in the room using comprehensive matching
+        foreach (var monster in currentRoom.Monsters)
+        {
+            var monsterName = monster.Name?.Replace(" (summoned)", "") ?? "";
+            if (string.IsNullOrWhiteSpace(monsterName))
+                continue;
+            
+            // Check if this room monster matches our monster reference
+            if (DoesMonsterMatch(monsterName, monsterReference))
+                return monsterName;
+        }
+        
+        // No room monster found, normalize the reference
+        return NormalizeMonsterName(monsterReference);
+    }
+    
+    /// <summary>
+    /// Check if a room monster matches a given monster reference using comprehensive logic
+    /// </summary>
+    private bool DoesMonsterMatch(string roomMonsterName, string monsterReference)
+    {
+        if (string.IsNullOrWhiteSpace(roomMonsterName) || string.IsNullOrWhiteSpace(monsterReference))
+            return false;
+        
+        // Exact match
+        if (roomMonsterName.Equals(monsterReference, StringComparison.OrdinalIgnoreCase))
+            return true;
+        
+        // Match without articles
+        var roomNameNoArticles = RemoveArticles(roomMonsterName);
+        var refNoArticles = RemoveArticles(monsterReference);
+        
+        if (roomNameNoArticles.Equals(refNoArticles, StringComparison.OrdinalIgnoreCase))
+            return true;
+        
+        // Check if the reference is contained in the room monster name
+        if (roomMonsterName.Contains(monsterReference, StringComparison.OrdinalIgnoreCase) ||
+            roomNameNoArticles.Contains(refNoArticles, StringComparison.OrdinalIgnoreCase))
+            return true;
+        
+        // Check if the room monster name is contained in the reference
+        if (monsterReference.Contains(roomMonsterName, StringComparison.OrdinalIgnoreCase) ||
+            refNoArticles.Contains(roomNameNoArticles, StringComparison.OrdinalIgnoreCase))
+            return true;
+        
+        // Check individual words (3+ characters) from room monster name against reference
+        var roomWords = roomNameNoArticles.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        foreach (var word in roomWords)
+        {
+            if (word.Length >= 3 && monsterReference.Contains(word, StringComparison.OrdinalIgnoreCase))
+                return true;
+        }
+        
+        // Check individual words (3+ characters) from reference against room monster name
+        var refWords = refNoArticles.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        foreach (var word in refWords)
+        {
+            if (word.Length >= 3 && roomMonsterName.Contains(word, StringComparison.OrdinalIgnoreCase))
+                return true;
+        }
+        
+        return false;
     }
 }
 
