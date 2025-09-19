@@ -191,6 +191,8 @@ class Runner : IHostedService
     private DateTime _lastAttackTime = DateTime.MinValue;
     private string? _lastSummonedMobFirstLetter;
     private bool _waitingForTimers = false; // wait for At/Ac timers to reach zero before next cycle
+    private DateTime _lastActivityTime = DateTime.MinValue; // track any game activity for inactivity detection
+    private DateTime _lastInactivityCheck = DateTime.MinValue; // track when we last checked for inactivity
 
     // Auto-shield tracking
     private DateTime _lastShieldCheck = DateTime.MinValue;
@@ -342,6 +344,9 @@ class Runner : IHostedService
 
         await _client.ConnectAsync(host, port, cancellationToken);
 
+        // Initialize activity tracking
+        TrackActivity();
+
         // Connect the TelnetClient's LineReceived event to both RoomTracker and CombatTracker
         _client.LineReceived += line => 
         {
@@ -364,11 +369,13 @@ class Runner : IHostedService
             // Hook up combat tracker events for logging
             _combatTracker.CombatStarted += combat =>
             {
+                TrackActivity(); // Track combat start as activity
                 _statsForm?.Log($"[Combat] Started fight with '{combat.MonsterName}'");
             };
 
             _combatTracker.CombatUpdated += combat =>
             {
+                TrackActivity(); // Track combat updates as activity
                 // Only log occasionally to avoid spam
                 if ((DateTime.UtcNow - combat.StartTime).TotalSeconds % 10 < 1)
                 {
@@ -378,11 +385,13 @@ class Runner : IHostedService
 
             _combatTracker.MonsterDeath += message =>
             {
+                TrackActivity(); // Track monster deaths as activity
                 _statsForm?.Log($"[Combat] {message}");
             };
 
             _combatTracker.CombatCompleted += entry =>
             {
+                TrackActivity(); // Track combat completion as activity
                 var expText = entry.ExperienceGained > 0 ? $", gained {entry.ExperienceGained} XP" : ", no XP";
                 _statsForm?.Log($"[Combat] Completed fight with '{entry.MonsterName}' ({entry.Status}) - Dealt: {entry.DamageDealt}, Taken: {entry.DamageTaken}, Duration: {entry.DurationSeconds:F1}s{expText}");
             };
@@ -392,6 +401,7 @@ class Runner : IHostedService
             {
                 try
                 {
+                    TrackActivity(); // Track XP checks as activity
                     _statsForm?.Log("[Combat] Monster died - checking experience (xp)");
                     SendCommand("xp");
                 }
@@ -405,6 +415,7 @@ class Runner : IHostedService
             {
                 try
                 {
+                    TrackActivity(); // Track initial commands as activity
                     _statsForm?.Log("[Combat] First stats detected - sending initial commands");
                     
                     // Send the initial commands with small delays between them
@@ -712,6 +723,7 @@ class Runner : IHostedService
             {
                 // Mark this line as processed for stats
                 _roomTracker.MarkLineProcessedForStats(bufferedLine);
+                TrackActivity(); // Track stats updates as activity
                 return;
             }
         }
@@ -722,7 +734,11 @@ class Runner : IHostedService
             var line = _screen.GetLine(y);
             if (string.IsNullOrWhiteSpace(line)) continue;
             if (!line.Contains("Hp=")) continue;
-            if (_stats.TryParseLine(line, _statsRegex)) return;
+            if (_stats.TryParseLine(line, _statsRegex))
+            {
+                TrackActivity(); // Track stats updates as activity
+                return;
+            }
         }
     }
 
@@ -1358,6 +1374,7 @@ class Runner : IHostedService
                     string? commandToTrack = null;
                     if (key.Key == ConsoleKey.Enter)
                     {
+                        TrackActivity(); // Track user input as activity
                         _logger.LogDebug("Enter key pressed, command: '{command}'", _lastCommand ?? "EMPTY");
                         _script.EnqueueImmediate('\r');
 
@@ -1501,26 +1518,10 @@ class Runner : IHostedService
         await _client.StopAsync(); 
     }
 
-    private void ApplyAttr(ScreenBuffer.CellAttribute attr, bool forceReadable = false, bool space = false)
+    private void TrackActivity()
     {
-        int fgIndex = attr.Fg >= 0 && attr.Fg < FgMap.Length ? attr.Fg : 7;
-        int bgIndex = attr.Bg >= 0 && attr.Bg < BgMap.Length ? attr.Bg : 0;
-        var fg = FgMap[fgIndex];
-        var bg = BgMap[bgIndex];
-
-        if (attr.Inverse) (fg, bg) = (bg, fg);
-
-        if (forceReadable && !space && fg == bg)
-        {
-            fg = (bg == ConsoleColor.Black || bg == ConsoleColor.DarkBlue || bg == ConsoleColor.DarkGreen ||
-                 bg == ConsoleColor.DarkCyan || bg == ConsoleColor.DarkRed || bg == ConsoleColor.DarkMagenta ||
-                 bg == ConsoleColor.DarkYellow) ? ConsoleColor.White : ConsoleColor.Black;
-        }
-
-        Console.ForegroundColor = fg;
-        Console.BackgroundColor = bg;
+        _lastActivityTime = DateTime.UtcNow;
     }
-
     private void TryRunAutomation()
     {
         if (!_profile.Features.AutoGong) return;
@@ -1663,7 +1664,7 @@ class Runner : IHostedService
         // Don't spam shield attempts
         if ((now - _lastShieldAction).TotalSeconds < 10) return;
         
-        // Find the best shield spell available (priority: aaura > gshield > shield > ppaura)
+        // Find the best shield spell available (priority: aegis > gshield > shield > paura)
         var shieldSpells = new[] { "aegis", "gshield", "shield", "paura" };
         SpellInfo? bestShield = null;
         
@@ -1690,7 +1691,7 @@ class Runner : IHostedService
         var characterName = _lastSnap?.Character ?? _charStore.GetLastCharacter(_selectedUser ?? "") ?? "";
         if (string.IsNullOrEmpty(characterName))
         {
-            _statsForm?.Log("[AutoHeal] No character name available for heal targeting");
+            _statsForm?.Log("[AutoShield] No character name available for shield targeting");
             return;
         }
         
@@ -1788,5 +1789,25 @@ class Runner : IHostedService
         {
             _logger.LogError(ex, "Failed to save debug settings");
         }
+    }
+
+    private void ApplyAttr(ScreenBuffer.CellAttribute attr, bool forceReadable = false, bool space = false)
+    {
+        int fgIndex = attr.Fg >= 0 && attr.Fg < FgMap.Length ? attr.Fg : 7;
+        int bgIndex = attr.Bg >= 0 && attr.Bg < BgMap.Length ? attr.Bg : 0;
+        var fg = FgMap[fgIndex];
+        var bg = BgMap[bgIndex];
+
+        if (attr.Inverse) (fg, bg) = (bg, fg);
+
+        if (forceReadable && !space && fg == bg)
+        {
+            fg = (bg == ConsoleColor.Black || bg == ConsoleColor.DarkBlue || bg == ConsoleColor.DarkGreen ||
+                 bg == ConsoleColor.DarkCyan || bg == ConsoleColor.DarkRed || bg == ConsoleColor.DarkMagenta ||
+                 bg == ConsoleColor.DarkYellow) ? ConsoleColor.White : ConsoleColor.Black;
+        }
+
+        Console.ForegroundColor = fg;
+        Console.BackgroundColor = bg;
     }
 }

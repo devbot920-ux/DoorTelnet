@@ -545,6 +545,10 @@ public class StatsForm : Form
         { 
             ShortcutKeys = Keys.F11 
         });
+        combatMenu.DropDownItems.Add(new ToolStripMenuItem("Show &Monster Table", null, (s, e) => ShowMonsterTable()) 
+        { 
+            ShortcutKeys = Keys.F12 
+        });
 
         var debugMenu = new ToolStripMenuItem("&Debug");
         debugMenu.DropDownItems.Add(new ToolStripMenuItem("&Room Parser Debug", null, (s, e) => TriggerRoomDebug()) 
@@ -1548,5 +1552,194 @@ public class StatsForm : Form
         };
         
         return armorKeywords.Any(keyword => itemName.Contains(keyword));
+    }
+    
+    private void ShowMonsterTable()
+    {
+        if (_combatTracker == null)
+        {
+            Log("[Combat] Combat tracker not available");
+            return;
+        }
+        
+        var completedCombats = _combatTracker.CompletedCombats;
+        if (completedCombats.Count == 0)
+        {
+            MessageBox.Show("No combat history available.", "Monster Table", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
+        }
+        
+        // Group combats by monster name and calculate aggregated statistics
+        var monsterStats = completedCombats
+            .GroupBy(c => c.MonsterName)
+            .Select(g => new
+            {
+                MonsterName = g.Key,
+                Kills = g.Count(),
+                TotalDamageDealt = g.Sum(c => c.DamageDealt),
+                TotalDamageTaken = g.Sum(c => c.DamageTaken),
+                TotalExperience = g.Sum(c => c.ExperienceGained),
+                AverageDamageDealt = g.Average(c => c.DamageDealt),
+                AverageDamageTaken = g.Average(c => c.DamageTaken),
+                AverageExperience = g.Average(c => c.ExperienceGained),
+                AverageDuration = g.Average(c => c.DurationSeconds),
+                Victories = g.Count(c => c.Status == "Victory"),
+                Deaths = g.Count(c => c.Status == "Death"),
+                Flees = g.Count(c => c.Status == "Fled"),
+                FirstKill = g.Min(c => c.StartTime),
+                LastKill = g.Max(c => c.StartTime)
+            })
+            .OrderByDescending(m => m.Kills)
+            .ThenByDescending(m => m.TotalExperience)
+            .ToList();
+        
+        // Create a detailed table display
+        var sb = new StringBuilder();
+        sb.AppendLine($"🏆 Monster Kill Statistics ({completedCombats.Count} total combats)");
+        sb.AppendLine();
+        sb.AppendLine("═══════════════════════════════════════════════════════════════════════════════════════════════");
+        sb.AppendLine("Monster Name                    Kills  Wins Deaths Flees  Total XP   Avg XP  Avg Dmg  Avg Dur");
+        sb.AppendLine("═══════════════════════════════════════════════════════════════════════════════════════════════");
+        
+        foreach (var monster in monsterStats)
+        {
+            var winRate = monster.Kills > 0 ? (double)monster.Victories / monster.Kills : 0;
+            var monsterNameTruncated = monster.MonsterName.Length > 30 
+                ? monster.MonsterName.Substring(0, 27) + "..." 
+                : monster.MonsterName;
+            
+            sb.AppendLine($"{monsterNameTruncated,-31} {monster.Kills,5} {monster.Victories,5} {monster.Deaths,6} {monster.Flees,5} " +
+                         $"{monster.TotalExperience,9:N0} {monster.AverageExperience,7:F0} {monster.AverageDamageDealt,8:F0} {monster.AverageDuration,7:F1}s");
+        }
+        
+        sb.AppendLine("═══════════════════════════════════════════════════════════════════════════════════════════════");
+        sb.AppendLine();
+        
+        // Add detailed statistics for top monsters
+        sb.AppendLine("📊 Top 10 Most Killed Monsters (Detailed):");
+        sb.AppendLine();
+        
+        var topMonsters = monsterStats.Take(10);
+        foreach (var monster in topMonsters)
+        {
+            var winRate = monster.Kills > 0 ? (double)monster.Victories / monster.Kills * 100 : 0;
+            var avgDpsDealt = monster.AverageDuration > 0 ? monster.AverageDamageDealt / monster.AverageDuration : 0;
+            var avgDpsTaken = monster.AverageDuration > 0 ? monster.AverageDamageTaken / monster.AverageDuration : 0;
+            
+            sb.AppendLine($"🔥 {monster.MonsterName}");
+            sb.AppendLine($"   Encounters: {monster.Kills} ({monster.Victories} wins, {monster.Deaths} deaths, {monster.Flees} flees) - {winRate:F1}% win rate");
+            sb.AppendLine($"   Experience: {monster.TotalExperience:N0} total, {monster.AverageExperience:F1} average");
+            sb.AppendLine($"   Damage: {monster.TotalDamageDealt:N0} dealt, {monster.TotalDamageTaken:N0} taken");
+            sb.AppendLine($"   Performance: {avgDpsDealt:F1} DPS dealt, {avgDpsTaken:F1} DPS taken, {monster.AverageDuration:F1}s avg fight");
+            sb.AppendLine($"   Timeline: First kill {monster.FirstKill:MM/dd HH:mm}, Last kill {monster.LastKill:MM/dd HH:mm}");
+            sb.AppendLine();
+        }
+        
+        // Add summary statistics
+        var totalMonsterTypes = monsterStats.Count;
+        var mostKilledMonster = monsterStats.FirstOrDefault();
+        var bestXpMonster = monsterStats.OrderByDescending(m => m.AverageExperience).FirstOrDefault();
+        var fastestKillMonster = monsterStats.OrderBy(m => m.AverageDuration).FirstOrDefault();
+        
+        sb.AppendLine("📈 Session Summary:");
+        sb.AppendLine($"   Monster Types Encountered: {totalMonsterTypes}");
+        if (mostKilledMonster != null)
+            sb.AppendLine($"   Most Killed: {mostKilledMonster.MonsterName} ({mostKilledMonster.Kills} times)");
+        if (bestXpMonster != null)
+            sb.AppendLine($"   Best XP/Kill: {bestXpMonster.MonsterName} ({bestXpMonster.AverageExperience:F0} avg XP)");
+        if (fastestKillMonster != null)
+            sb.AppendLine($"   Fastest Kills: {fastestKillMonster.MonsterName} ({fastestKillMonster.AverageDuration:F1}s avg)");
+        
+        sb.AppendLine();
+        sb.AppendLine("Legend: Wins = Victories, Deaths = Player deaths, Flees = Combat fled");
+        sb.AppendLine("        Total XP = Total experience gained, Avg XP = Average per kill");
+        sb.AppendLine("        Avg Dmg = Average damage dealt per fight, Avg Dur = Average fight duration");
+        
+        // Show in a scrollable message box or form
+        ShowScrollableText("Monster Kill Table", sb.ToString());
+    }
+    
+    private void ShowScrollableText(string title, string content)
+    {
+        var form = new Form
+        {
+            Text = title,
+            Size = new Size(1000, 700),
+            StartPosition = FormStartPosition.CenterParent,
+            ShowInTaskbar = false,
+            MaximizeBox = true,
+            MinimizeBox = false
+        };
+        
+        var textBox = new TextBox
+        {
+            Multiline = true,
+            ReadOnly = true,
+            ScrollBars = ScrollBars.Both,
+            Dock = DockStyle.Fill,
+            Font = new Font("Consolas", 9),
+            BackColor = Color.White,
+            Text = content,
+            WordWrap = false
+        };
+        
+        var buttonPanel = new Panel
+        {
+            Height = 40,
+            Dock = DockStyle.Bottom,
+            Padding = new Padding(10)
+        };
+        
+        var copyButton = new Button
+        {
+            Text = "Copy to Clipboard",
+            Size = new Size(120, 25),
+            Location = new Point(10, 8),
+            BackColor = Color.LightBlue,
+            FlatStyle = FlatStyle.Flat
+        };
+        
+        var closeButton = new Button
+        {
+            Text = "Close",
+            Size = new Size(80, 25),
+            Location = new Point(140, 8),
+            BackColor = Color.LightGray,
+            FlatStyle = FlatStyle.Flat,
+            DialogResult = DialogResult.OK
+        };
+        
+        copyButton.Click += (s, e) =>
+        {
+            try
+            {
+                Clipboard.SetText(content);
+                Log("[Combat] Monster table copied to clipboard");
+                MessageBox.Show("Monster table copied to clipboard!", "Copy Successful", 
+                               MessageBoxButtons.OK, MessageBoxIcon.Information);
+            }
+            catch (Exception ex)
+            {
+                Log($"[Combat] Failed to copy to clipboard: {ex.Message}");
+                MessageBox.Show($"Failed to copy to clipboard: {ex.Message}", "Copy Error", 
+                               MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+        };
+        
+        buttonPanel.Controls.Add(copyButton);
+        buttonPanel.Controls.Add(closeButton);
+        
+        form.Controls.Add(textBox);
+        form.Controls.Add(buttonPanel);
+        form.AcceptButton = closeButton;
+        
+        try
+        {
+            form.ShowDialog(this);
+        }
+        finally
+        {
+            form.Dispose();
+        }
     }
 }
