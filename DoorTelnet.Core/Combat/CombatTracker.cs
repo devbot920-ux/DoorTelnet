@@ -1,4 +1,5 @@
 using System.Text.RegularExpressions;
+using DoorTelnet.Core.World;
 
 namespace DoorTelnet.Core.Combat;
 
@@ -130,38 +131,49 @@ public class CombatTracker
     private readonly List<ActiveCombat> _combatsAwaitingExperience = new();
     private readonly TimeSpan _combatTimeout = TimeSpan.FromMinutes(2); // Auto-complete stale combats
     private readonly TimeSpan _experienceTimeout = TimeSpan.FromSeconds(30); // Time to wait for experience after death
+    private readonly RoomTracker? _roomTracker; // Optional dependency for room monster matching
     
-    // Combat detection regex patterns
-    private static readonly Regex PlayerDamagePattern = new(
-        @"^You (?<action>attack|strike|hit|slash|pierce|crush|bash|pummel|stab|slice|smash|whack|pound|thump|thwack) (?<target>.+?) (?:and (?<result>do .+? damage|inflict .+? wounds?|cause .+? pain|deal .+? damage))",
-        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    // Track experience for calculating gains
+    private int _lastExperienceLeft = -1;
+    private int _lastCurrentExperience = -1;
     
-    private static readonly Regex MonsterDamagePattern = new(
-        @"^(?:A |An |The )?(?<monster>.+?) (?<action>attacks?|strikes?|hits?|slashes?|pierces?|crushes?|bashes?|pummels?|stabs?|slices?|smashes?|whacks?|pounds?|thumps?|thwacks?) you (?:and (?<result>does? .+? damage|inflicts? .+? wounds?|causes? .+? pain|deals? .+? damage))",
-        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    // Track if we've seen first stats line to trigger initial commands
+    private bool _hasSeenFirstStats = false;
     
-    private static readonly Regex AreaDamagePattern = new(
-        @"^You suffer (?<damage>\d+) damage(?:\s+from (?<source>.+?))?!?\.?\s*$",
-        RegexOptions.Compiled | RegexOptions.IgnoreCase);
-    
-    private static readonly Regex DamageNumberPattern = new(
-        @"(?<amount>\d+)\s+(?:point(?:s)?\s+of\s+)?damage",
-        RegexOptions.Compiled | RegexOptions.IgnoreCase);
-    
-    // Experience detection regex patterns
+    // Simple regex patterns for combat detection
+    private static readonly Regex NumberRegex = new(@"\d+", RegexOptions.Compiled);
     private static readonly Regex ExperiencePattern = new(
         @"\[Cur:\s*(?<current>\d+)\s+Nxt:\s*(?<next>\d+)\s+Left:\s*(?<left>\d+)\]",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
-       
-    // Death detection patterns - using the same logic as RoomModels
-    private static readonly Regex DeathKeywordPattern = new(
-        @"\b(?:dies|died|dead|death|earth)\b\.?!?\s*$",
+    
+    // Enhanced stats pattern to detect stats lines that need to be stripped
+    private static readonly Regex StatsPattern = new(
+        @"\[Hp=\d+/Mp=\d+/Mv=\d+(?:/At=\d+)?(?:/Ac=\d+)?\]",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    
+    // Death detection patterns - using the same logic as RoomModels
+    private static readonly string[] DeathWords = 
+    {
+        "banished", "cracks", "darkness", "dead", "death", "defeated", "dies", "disappears", 
+        "earth", "exhausted", "existance", "existence", "flames", "goddess", "gone", "ground", 
+        "himself", "killed", "lifeless", "mana", "manaless", "nothingness", "over", "pieces", 
+        "portal", "scattered", "silent", "slain", "still", "vortex"
+    };
     
     public event Action<CombatEntry>? CombatCompleted;
     public event Action<ActiveCombat>? CombatStarted;
     public event Action<ActiveCombat>? CombatUpdated;
     public event Action<string>? MonsterDeath; // For logging purposes
+    public event Action? RequestExperienceCheck; // Request XP command after death
+    public event Action? RequestInitialCommands; // Request initial commands when joining game
+    
+    /// <summary>
+    /// Initialize combat tracker with optional room tracker for enhanced monster identification
+    /// </summary>
+    public CombatTracker(RoomTracker? roomTracker = null)
+    {
+        _roomTracker = roomTracker;
+    }
     
     /// <summary>
     /// Get all completed combat entries
@@ -192,6 +204,79 @@ public class CombatTracker
     }
     
     /// <summary>
+    /// Clean line content and remove all stats blocks while preserving XP lines
+    /// </summary>
+    private string CleanLineContent(string line)
+    {
+        if (string.IsNullOrWhiteSpace(line))
+            return string.Empty;
+        
+        // Remove ANSI escape sequences
+        var cleaned = Regex.Replace(line, @"\x1B\[[0-9;]*[a-zA-Z]", "");
+        
+        // Check if this is the first stats line we've seen (trigger initial commands)
+        if (!_hasSeenFirstStats && StatsPattern.IsMatch(cleaned))
+        {
+            _hasSeenFirstStats = true;
+            RequestInitialCommands?.Invoke();
+        }
+        
+        // Remove all stats blocks but preserve XP lines
+        if (!ExperiencePattern.IsMatch(cleaned))
+        {
+            cleaned = StatsPattern.Replace(cleaned, "").Trim();
+        }
+        
+        // Strip leading partial stats (like the room tracker does)
+        cleaned = StripLeadingPartialStats(cleaned);
+        
+        // Remove extra whitespace
+        cleaned = Regex.Replace(cleaned, @"\s+", " ").Trim();
+        
+        return cleaned;
+    }
+    
+    /// <summary>
+    /// Strip leading partial statistics that interfere with parsing (like [C from xp command)
+    /// </summary>
+    private string StripLeadingPartialStats(string line)
+    {
+        if (string.IsNullOrEmpty(line))
+            return line;
+        
+        // Remove leading partial brackets like "[C" that interfere with parsing
+        if (line.StartsWith("[") && line.Length > 1 && char.IsLetter(line[1]))
+        {
+            // Don't strip if it looks like an XP line
+            if (line.Contains("Cur:") || line.Contains("Nxt:") || line.Contains("Left:"))
+                return line;
+            
+            // Find the end of the partial bracket or use the whole line if malformed
+            int endBracket = line.IndexOf(']', 1);
+            if (endBracket > 0)
+            {
+                // Check if this looks like a partial stat line
+                var bracketContent = line.Substring(0, endBracket + 1);
+                if (bracketContent.Length < 10) // Partial brackets are usually short
+                {
+                    line = line.Substring(endBracket + 1).TrimStart();
+                }
+            }
+            else
+            {
+                // No closing bracket found, likely partial - remove the opening part
+                var spaceIndex = line.IndexOf(' ');
+                if (spaceIndex > 0 && spaceIndex < 5) // Only if it's a short partial
+                {
+                    line = line.Substring(spaceIndex + 1).TrimStart();
+                }
+            }
+        }
+        
+        return line;
+    }
+    
+    /// <summary>
     /// Process a line of game text to detect combat events
     /// </summary>
     /// <param name="line">The line of text to process</param>
@@ -201,39 +286,36 @@ public class CombatTracker
         if (string.IsNullOrWhiteSpace(line))
             return false;
         
-        var trimmedLine = line.Trim();
+        // Clean the line first
+        var cleanedLine = CleanLineContent(line);
+        if (string.IsNullOrWhiteSpace(cleanedLine))
+            return false;
+        
         bool foundCombatEvent = false;
         
-        // Try to detect player damage first
-        if (TryParsePlayerDamage(trimmedLine, out var playerDamage))
+        // Try to detect player damage (You ... damage)
+        if (TryParsePlayerDamage(cleanedLine, out var playerDamage))
         {
             RecordPlayerDamage(playerDamage.target, playerDamage.damage);
             foundCombatEvent = true;
         }
         
-        // Try to detect monster damage
-        if (TryParseMonsterDamage(trimmedLine, out var monsterDamage))
+        // Try to detect monster damage (A/An/The ... you ... damage)
+        if (TryParseMonsterDamage(cleanedLine, out var monsterDamage))
         {
             RecordMonsterDamage(monsterDamage.monster, monsterDamage.damage);
             foundCombatEvent = true;
         }
         
-        // Try to detect area damage
-        if (TryParseAreaDamage(trimmedLine, out var areaDamage))
-        {
-            RecordAreaDamage(areaDamage.source, areaDamage.damage);
-            foundCombatEvent = true;
-        }
-        
         // Try to detect death events
-        if (TryParseDeathEvent(trimmedLine, out var deathInfo))
+        if (TryParseDeathEvent(cleanedLine, out var deathInfo))
         {
             ProcessMonsterDeath(deathInfo.monsters);
             foundCombatEvent = true;
         }
         
         // Try to detect experience messages
-        if (TryParseExperience(trimmedLine, out var experience))
+        if (TryParseExperience(cleanedLine, out var experience))
         {
             AssignExperienceToRecentCombats(experience);
             foundCombatEvent = true;
@@ -243,142 +325,290 @@ public class CombatTracker
     }
     
     /// <summary>
-    /// Try to parse player damage from a line
+    /// Find the first room monster that matches the damage line
+    /// </summary>
+    private string? FindMatchingRoomMonster(string line)
+    {
+        var currentRoom = _roomTracker?.CurrentRoom;
+        if (currentRoom?.Monsters == null || currentRoom.Monsters.Count == 0)
+            return null;
+        
+        // Check monsters in the room
+        foreach (var monster in currentRoom.Monsters)
+        {
+            var monsterName = monster.Name?.Replace(" (summoned)", "") ?? "";
+            if (string.IsNullOrWhiteSpace(monsterName))
+                continue;
+            
+            // Check exact match first
+            if (line.Contains(monsterName, StringComparison.OrdinalIgnoreCase))
+                return monsterName;
+            
+            // Check without articles
+            var withoutArticles = RemoveArticles(monsterName);
+            if (line.Contains(withoutArticles, StringComparison.OrdinalIgnoreCase))
+                return monsterName;
+            
+            // Check individual words in the monster name (for partial matches)
+            var words = monsterName.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+            foreach (var word in words)
+            {
+                if (word.Length >= 3 && line.Contains(word, StringComparison.OrdinalIgnoreCase))
+                    return monsterName;
+            }
+        }
+        
+        return null;
+    }
+    
+    /// <summary>
+    /// Simple player damage detection: "You ... damage" with room monster matching
     /// </summary>
     private bool TryParsePlayerDamage(string line, out (string target, int damage) result)
     {
         result = default;
-        
-        var match = PlayerDamagePattern.Match(line);
-        if (!match.Success)
+
+        // Remove any trailing ! or . from line, might be more than one.
+        line = line.Replace("!", "").Replace(".", "");
+
+        // Simple check: starts with "You" and ends with "damage"
+        if (!line.StartsWith("You ", StringComparison.OrdinalIgnoreCase) || 
+            !line.EndsWith("damage", StringComparison.OrdinalIgnoreCase))
             return false;
         
-        var target = match.Groups["target"].Value.Trim();
-        var damageResult = match.Groups["result"].Value;
+        // Extract all numbers from the line
+        var matches = NumberRegex.Matches(line);
+        var numbers = matches.Cast<Match>().Select(m => int.Parse(m.Value)).ToList();
         
-        var damage = ExtractDamageAmount(damageResult);
-              
+        if (numbers.Count == 0)
+            return false;
+        
+        // Take the largest number as damage (usually the most significant)
+        var damage = numbers.Max();
+        
+        // First try to find a matching monster from the current room
+        var roomMonster = FindMatchingRoomMonster(line);
+        if (roomMonster != null)
+        {
+            result = (roomMonster, damage);
+            return true;
+        }
+        
+        // Fallback: Extract target name using the old method
+        var targetPart = line.Substring(4); // Remove "You "
+        var damageIndex = targetPart.LastIndexOf("damage", StringComparison.OrdinalIgnoreCase);
+        if (damageIndex <= 0)
+            return false;
+        
+        var targetSection = targetPart.Substring(0, damageIndex).Trim();
+        
+        // Remove common action words to get the target
+        var actionWords = new[] { "attack", "strike", "hit", "slash", "pierce", "crush", "bash", 
+                                "pummel", "stab", "slice", "smash", "whack", "pound", "thump", 
+                                "thwack", "and", "do", "deal", "inflict", "cause", "for" };
+        
+        var words = targetSection.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        var targetWords = new List<string>();
+        
+        foreach (var word in words)
+        {
+            var cleanWord = word.TrimEnd('.', ',', '!', '?');
+            if (!actionWords.Contains(cleanWord.ToLowerInvariant()) && !NumberRegex.IsMatch(cleanWord))
+            {
+                targetWords.Add(cleanWord);
+            }
+        }
+        
+        if (targetWords.Count == 0)
+            return false;
+        
+        var target = string.Join(" ", targetWords);
+        
         result = (target, damage);
         return true;
     }
     
     /// <summary>
-    /// Try to parse monster damage from a line
+    /// Simple monster damage detection: "A/An/The ... you ... damage" with room monster matching
     /// </summary>
     private bool TryParseMonsterDamage(string line, out (string monster, int damage) result)
     {
         result = default;
+
+        // Remove any trailing ! or . from line, might be more than one.
+        line = line.Replace("!", "").Replace(".", "");
+
+        // Simple check: starts with A/An/The and contains "you" and ends with "damage"
+        var startsCorrectly = line.StartsWith("A ", StringComparison.OrdinalIgnoreCase) ||
+                             line.StartsWith("An ", StringComparison.OrdinalIgnoreCase) ||
+                             line.StartsWith("The ", StringComparison.OrdinalIgnoreCase);
         
-        var match = MonsterDamagePattern.Match(line);
-        if (!match.Success)
+        if (!startsCorrectly || 
+            !line.Contains(" you ", StringComparison.OrdinalIgnoreCase) ||
+            !line.EndsWith("damage", StringComparison.OrdinalIgnoreCase))
             return false;
         
-        var monster = match.Groups["monster"].Value.Trim();
-        var damageResult = match.Groups["result"].Value;
+        // Extract all numbers from the line
+        var matches = NumberRegex.Matches(line);
+        var numbers = matches.Cast<Match>().Select(m => int.Parse(m.Value)).ToList();
         
-        var damage = ExtractDamageAmount(damageResult);
+        if (numbers.Count == 0)
+            return false;
+        
+        // Take the largest number as damage
+        var damage = numbers.Max();
+        
+        // First try to find a matching monster from the current room
+        var roomMonster = FindMatchingRoomMonster(line);
+        if (roomMonster != null)
+        {
+            result = (roomMonster, damage);
+            return true;
+        }
+        
+        // Fallback: Extract monster name using the old method
+        var youIndex = line.IndexOf(" you ", StringComparison.OrdinalIgnoreCase);
+        if (youIndex <= 0)
+            return false;
+        
+        var monsterSection = line.Substring(0, youIndex).Trim();
+        
+        // Remove action words to get monster name
+        var actionWords = new[] { "attacks", "attack", "strikes", "strike", "hits", "hit", 
+                                "slashes", "slash", "pierces", "pierce", "crushes", "crush", 
+                                "bashes", "bash", "pummels", "pummel", "stabs", "stab", 
+                                "slices", "slice", "smashes", "smash", "whacks", "whack", 
+                                "pounds", "pound", "thumps", "thump", "thwacks", "thwack", "and" };
+        
+        var words = monsterSection.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        var monsterWords = new List<string>();
+        
+        foreach (var word in words)
+        {
+            var cleanWord = word.TrimEnd('.', ',', '!', '?');
+            if (!actionWords.Contains(cleanWord.ToLowerInvariant()) && !NumberRegex.IsMatch(cleanWord))
+            {
+                monsterWords.Add(cleanWord);
+            }
+        }
+        
+        if (monsterWords.Count == 0)
+            return false;
+        
+        var monster = string.Join(" ", monsterWords);
         
         result = (monster, damage);
         return true;
     }
     
     /// <summary>
-    /// Try to parse area damage from a line
-    /// </summary>
-    private bool TryParseAreaDamage(string line, out (string source, int damage) result)
-    {
-        result = default;
-        
-        var match = AreaDamagePattern.Match(line);
-        if (!match.Success)
-            return false;
-        
-        var damageStr = match.Groups["damage"].Value;
-        var source = match.Groups["source"].Success ? match.Groups["source"].Value.Trim() : "area effect";
-        
-        if (int.TryParse(damageStr, out var damage))
-        {
-            result = (source, damage);
-            return true;
-        }
-        
-        return false;
-    }
-    
-    /// <summary>
-    /// Try to parse death events from a line using the same logic as RoomModels
+    /// Death detection using simplified logic - check if line ends with death word
     /// </summary>
     private bool TryParseDeathEvent(string line, out (List<string> monsters, string deathLine) result)
     {
         result = default;
         
-        // Use the same logic as RoomModels.IsDeathLine
-        if (!IsDeathLine(line))
+        if (string.IsNullOrWhiteSpace(line))
             return false;
         
-        // Find monster names that appear in the death line
-        var monsterNames = ExtractMonsterNamesFromLine(line);
+        // Remove trailing punctuation and get last word
+        var trimmed = line.TrimEnd('.', '!', '?', ' ');
+        var words = trimmed.Split(' ', StringSplitOptions.RemoveEmptyEntries);
         
-        if (monsterNames.Count == 0)
+        if (words.Length == 0)
             return false;
         
-        result = (monsterNames, line);
-        return true;
-    }
-    
-    /// <summary>
-    /// Death detection using the same logic as RoomModels.IsDeathLine
-    /// </summary>
-    private bool IsDeathLine(string line)
-    {
-        if (string.IsNullOrWhiteSpace(line)) 
+        var firstWord = words[0].ToLowerInvariant();
+        var lastWord = words[^1].ToLowerInvariant();
+
+        // Check if it's a death word and starts with "the" or "a/an "
+        if (!DeathWords.Contains(lastWord))
             return false;
-        
-        var trimmed = line.TrimEnd();
-        
-        // Accept ending punctuation . or ! (possibly both forms repeated) but optional
-        // Extract last token (letters only) ignoring trailing punctuation
-        int i = trimmed.Length - 1;
-        while (i >= 0 && (trimmed[i] == '!' || trimmed[i] == '.' || trimmed[i] == ' ')) 
-            i--;
-        
-        int end = i;
-        if (end < 0) 
+        if (!(firstWord == "the" || firstWord == "a" || firstWord == "an"))
             return false;
-        
-        while (i >= 0 && char.IsLetter(trimmed[i])) 
-            i--;
-        
-        var lastWord = trimmed.Substring(i + 1, end - i).ToLowerInvariant();
-        return lastWord is "banished" or "cracks" or "darkness" or "dead" or "death" or "defeated" or "dies" or "disappears" or "earth" or "exhausted" or "existance" or "existence" or "flames" or "goddess" or "gone" or "ground" or "himself" or "killed" or "lifeless" or "mana" or "manaless" or "nothingness" or "over" or "pieces" or "portal" or "scattered" or "silent" or "slain" or "still" or "vortex";
-    }
-    
-    /// <summary>
-    /// Extract monster names from a death line by looking for active combat monsters
-    /// </summary>
-    private List<string> ExtractMonsterNamesFromLine(string line)
-    {
+
+        // First try to find monsters from current room that match the death line
         var foundMonsters = new List<string>();
         
-        lock (_sync)
+        if (_roomTracker?.CurrentRoom?.Monsters != null)
         {
-            // Check if any active combat monster names appear in the death line
-            foreach (var combat in _activeCombats.Values)
+            foreach (var roomMonster in _roomTracker.CurrentRoom.Monsters)
             {
-                var monsterName = combat.MonsterName;
+                var monsterName = roomMonster.Name?.Replace(" (summoned)", "") ?? "";
+                if (string.IsNullOrWhiteSpace(monsterName))
+                    continue;
                 
-                // Remove common prefixes for matching
-                var baseName = RemoveArticles(monsterName);
-                
-                // Check if the base name appears in the death line
-                if (line.IndexOf(baseName, StringComparison.OrdinalIgnoreCase) >= 0)
+                // Check if monster name appears in death line
+                if (line.Contains(monsterName, StringComparison.OrdinalIgnoreCase) ||
+                    line.Contains(RemoveArticles(monsterName), StringComparison.OrdinalIgnoreCase))
                 {
                     foundMonsters.Add(monsterName);
                 }
             }
         }
         
-        return foundMonsters;
+        // Fallback: check active combats
+        if (foundMonsters.Count == 0)
+        {
+            lock (_sync)
+            {
+                foreach (var combat in _activeCombats.Values)
+                {
+                    var monsterName = combat.MonsterName;
+                    var baseName = RemoveArticles(monsterName);
+                    
+                    if (line.Contains(baseName, StringComparison.OrdinalIgnoreCase))
+                    {
+                        foundMonsters.Add(monsterName);
+                    }
+                }
+            }
+        }
+        
+        if (foundMonsters.Count == 0)
+            return false;
+        
+        result = (foundMonsters, line);
+        return true;
+    }
+    
+    /// <summary>
+    /// Parse experience and track the difference to calculate actual gains
+    /// </summary>
+    private bool TryParseExperience(string line, out int experienceGained)
+    {
+        experienceGained = 0;
+        
+        var match = ExperiencePattern.Match(line);
+        if (!match.Success)
+            return false;
+        
+        if (int.TryParse(match.Groups["current"].Value, out var current) &&
+            int.TryParse(match.Groups["left"].Value, out var left))
+        {
+            // If we have previous experience data, calculate the actual gain
+            if (_lastCurrentExperience >= 0 && _lastExperienceLeft >= 0)
+            {
+                // Experience gained = difference in current experience
+                experienceGained = current - _lastCurrentExperience;
+                
+                // Sanity check - if gain seems too large or negative, use left field difference
+                if (experienceGained <= 0 || experienceGained > 10000)
+                {
+                    // Alternative calculation using "left" field
+                    experienceGained = _lastExperienceLeft - left;
+                }
+            }
+            
+            // Update our tracking values
+            _lastCurrentExperience = current;
+            _lastExperienceLeft = left;
+            
+            // If we couldn't calculate a gain, return false but still update tracking
+            return experienceGained > 0;
+        }
+        
+        return false;
     }
     
     /// <summary>
@@ -421,47 +651,12 @@ public class CombatTracker
                     
                     // Fire event for logging
                     MonsterDeath?.Invoke($"Combat with '{monsterName}' ended - awaiting experience (dealt: {combat.DamageDealt}, taken: {combat.DamageTaken}, duration: {combat.DurationSeconds:F1}s)");
+                    
+                    // Request XP check after monster death
+                    RequestExperienceCheck?.Invoke();
                 }
             }
         }
-    }
-    
-    /// <summary>
-    /// Try to parse experience information from a line
-    /// </summary>
-    private bool TryParseExperience(string line, out int experience)
-    {
-        experience = 0;
-        
-        // Try the main experience format: [Cur: X Nxt: Y Left: Z]
-        var expMatch = ExperiencePattern.Match(line);
-        if (expMatch.Success)
-        {
-            // Calculate experience gained from the "Left" field
-            // This represents experience needed to next level
-            if (int.TryParse(expMatch.Groups["left"].Value, out var left))
-            {
-                // For now, we'll use a simple heuristic to estimate experience gained
-                // This could be improved by tracking previous "left" values
-                experience = Math.Max(1, 100 - left); // Simple estimation
-                return true;
-            }
-        } 
-        return false;
-    }
-    
-    /// <summary>
-    /// Extract numeric damage amount from damage description
-    /// </summary>
-    private int ExtractDamageAmount(string damageText)
-    {
-        var match = DamageNumberPattern.Match(damageText);
-        if (match.Success && int.TryParse(match.Groups["amount"].Value, out var amount))
-        {
-            return amount;
-        }
-        
-        return 0;
     }
     
     /// <summary>
@@ -471,8 +666,21 @@ public class CombatTracker
     {
         lock (_sync)
         {
-            // Normalize target name (remove articles, clean up)
-            var normalizedTarget = NormalizeMonsterName(target);
+            // Use the target as-is if it came from room matching, otherwise normalize
+            var normalizedTarget = target;
+            var isRoomEntity = false;
+            
+            if (_roomTracker?.CurrentRoom?.Monsters != null)
+            {
+                // Check if target matches any monster in the room
+                isRoomEntity = _roomTracker.CurrentRoom.Monsters.Any(m => 
+                    m.Name?.Replace(" (summoned)", "").Equals(target, StringComparison.OrdinalIgnoreCase) == true);
+            }
+            
+            if (!isRoomEntity)
+            {
+                normalizedTarget = NormalizeMonsterName(target);
+            }
             
             if (!_activeCombats.TryGetValue(normalizedTarget, out var combat))
             {
@@ -499,8 +707,21 @@ public class CombatTracker
     {
         lock (_sync)
         {
-            // Normalize monster name
-            var normalizedMonster = NormalizeMonsterName(monster);
+            // Use the monster name as-is if it came from room matching, otherwise normalize
+            var normalizedMonster = monster;
+            var isRoomEntity = false;
+            
+            if (_roomTracker?.CurrentRoom?.Monsters != null)
+            {
+                // Check if monster matches any monster in the room
+                isRoomEntity = _roomTracker.CurrentRoom.Monsters.Any(m => 
+                    m.Name?.Replace(" (summoned)", "").Equals(monster, StringComparison.OrdinalIgnoreCase) == true);
+            }
+            
+            if (!isRoomEntity)
+            {
+                normalizedMonster = NormalizeMonsterName(monster);
+            }
             
             if (!_activeCombats.TryGetValue(normalizedMonster, out var combat))
             {
@@ -511,35 +732,6 @@ public class CombatTracker
                     LastDamageTime = DateTime.UtcNow
                 };
                 _activeCombats[normalizedMonster] = combat;
-                CombatStarted?.Invoke(combat);
-            }
-            
-            combat.DamageTaken += damage;
-            combat.LastDamageTime = DateTime.UtcNow;
-            CombatUpdated?.Invoke(combat);
-        }
-    }
-    
-    /// <summary>
-    /// Record area damage (damage from non-specific sources)
-    /// </summary>
-    private void RecordAreaDamage(string source, int damage)
-    {
-        lock (_sync)
-        {
-            // For area damage, we might not have a specific active combat
-            // For now, we'll create a special entry for environmental damage
-            var normalizedSource = NormalizeMonsterName(source);
-            
-            if (!_activeCombats.TryGetValue(normalizedSource, out var combat))
-            {
-                combat = new ActiveCombat
-                {
-                    MonsterName = normalizedSource,
-                    StartTime = DateTime.UtcNow,
-                    LastDamageTime = DateTime.UtcNow
-                };
-                _activeCombats[normalizedSource] = combat;
                 CombatStarted?.Invoke(combat);
             }
             
@@ -649,7 +841,17 @@ public class CombatTracker
             _completedCombats.Clear();
             _activeCombats.Clear();
             _combatsAwaitingExperience.Clear();
+            _lastExperienceLeft = -1;
+            _lastCurrentExperience = -1;
         }
+    }
+    
+    /// <summary>
+    /// Reset the first stats tracking (for reconnections)
+    /// </summary>
+    public void ResetFirstStatsTracking()
+    {
+        _hasSeenFirstStats = false;
     }
     
     /// <summary>

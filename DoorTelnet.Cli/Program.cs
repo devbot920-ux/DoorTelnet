@@ -43,7 +43,12 @@ builder.Services.AddSingleton(sp =>
 builder.Services.AddSingleton<RuleEngine>();
 builder.Services.AddSingleton<StatsTracker>();
 builder.Services.AddSingleton<PlayerProfile>();
-builder.Services.AddSingleton<CombatTracker>(); // Add CombatTracker service
+builder.Services.AddSingleton<RoomTracker>();
+builder.Services.AddSingleton<CombatTracker>(sp =>
+{
+    var roomTracker = sp.GetRequiredService<RoomTracker>();
+    return new CombatTracker(roomTracker);
+}); // Add CombatTracker service with RoomTracker dependency
 
 builder.Services.AddSingleton(sp =>
 {
@@ -74,7 +79,6 @@ builder.Services.AddSingleton(sp => new CredentialStore(Path.Combine(Environment
 builder.Services.AddSingleton(sp => new CharacterProfileStore(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "DoorTelnet", "characters.json")));
 builder.Services.AddSingleton(sp => new PlayerStatsStore(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "DoorTelnet", "playerstats.json")));
 builder.Services.AddSingleton(sp => new SettingsStore(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "DoorTelnet", "settings.json")));
-builder.Services.AddSingleton<RoomTracker>();
 
 builder.Services.AddHostedService<Runner>();
 
@@ -383,6 +387,57 @@ class Runner : IHostedService
                 _statsForm?.Log($"[Combat] Completed fight with '{entry.MonsterName}' ({entry.Status}) - Dealt: {entry.DamageDealt}, Taken: {entry.DamageTaken}, Duration: {entry.DurationSeconds:F1}s{expText}");
             };
 
+            // Hook up automatic command events
+            _combatTracker.RequestExperienceCheck += () =>
+            {
+                try
+                {
+                    _statsForm?.Log("[Combat] Monster died - checking experience (xp)");
+                    SendCommand("xp");
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "Failed to send XP command after monster death");
+                }
+            };
+
+            _combatTracker.RequestInitialCommands += () =>
+            {
+                try
+                {
+                    _statsForm?.Log("[Combat] First stats detected - sending initial commands");
+                    
+                    // Send the initial commands with small delays between them
+                    Task.Run(async () =>
+                    {
+                        try
+                        {
+                            SendCommand("xp");
+                            await Task.Delay(500);
+                            
+                            SendCommand("st2");
+                            await Task.Delay(500);
+                            
+                            SendCommand("st");
+                            await Task.Delay(500);
+                            
+                            SendCommand("spells");
+                            
+                            _statsForm?.Log("[Combat] Initial commands sent: xp, st2, st, spells");
+                        }
+                        catch (Exception ex)
+                        {
+                            _logger.LogError(ex, "Failed to send initial commands");
+                            _statsForm?.Log($"[Combat] Error sending initial commands: {ex.Message}");
+                        }
+                    });
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "Failed to initiate initial commands after first stats");
+                }
+            };
+
             _logger.LogInformation("Successfully hooked up combat tracker events");
         }
         catch (Exception ex)
@@ -586,6 +641,10 @@ class Runner : IHostedService
         try
         {
             await _client.StopAsync();
+            
+            // Reset combat tracker state on disconnect
+            _combatTracker.ResetFirstStatsTracking();
+            
             _logger.LogInformation("Telnet client disconnected successfully");
             _statsForm?.Log("Disconnected from server");
         }
@@ -605,6 +664,10 @@ class Runner : IHostedService
             try
             {
                 await _client.StopAsync();
+                
+                // Reset combat tracker state on disconnect
+                _combatTracker.ResetFirstStatsTracking();
+                
                 _logger.LogInformation("Disconnected existing connection");
             }
             catch (Exception ex)
