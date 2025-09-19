@@ -1601,7 +1601,7 @@ class Runner : IHostedService
         if ((now - _lastShieldAction).TotalSeconds < 10) return;
         
         // Find the best shield spell available (priority: aaura > gshield > shield > ppaura)
-        var shieldSpells = new[] { "aaura", "gshield", "shield", "ppaura" };
+        var shieldSpells = new[] { "aegis", "gshield", "shield", "paura" };
         SpellInfo? bestShield = null;
         
         foreach (var spellNick in shieldSpells)

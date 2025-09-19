@@ -152,11 +152,7 @@ public class CombatTracker
     private static readonly Regex ExperiencePattern = new(
         @"\[Cur:\s*(?<current>\d+)\s+Nxt:\s*(?<next>\d+)\s+Left:\s*(?<left>\d+)\]",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
-    
-    private static readonly Regex ExperienceGainPattern = new(
-        @"(?:You (?:gain|receive|earn) (?<amount>\d+) experience|(?<amount>\d+) experience (?:gained|received|earned))",
-        RegexOptions.Compiled | RegexOptions.IgnoreCase);
-    
+       
     // Death detection patterns - using the same logic as RoomModels
     private static readonly Regex DeathKeywordPattern = new(
         @"\b(?:dies|died|dead|death|earth)\b\.?!?\s*$",
@@ -450,19 +446,7 @@ public class CombatTracker
                 experience = Math.Max(1, 100 - left); // Simple estimation
                 return true;
             }
-        }
-        
-        // Try direct experience gain messages
-        var gainMatch = ExperienceGainPattern.Match(line);
-        if (gainMatch.Success)
-        {
-            if (int.TryParse(gainMatch.Groups["amount"].Value, out var amount))
-            {
-                experience = amount;
-                return true;
-            }
-        }
-        
+        } 
         return false;
     }
     

@@ -237,6 +237,23 @@ public class StatsForm : Form
         Margin = new Padding(2, 6, 8, 4) 
     };
     
+    // Add auto-heal threshold control
+    private readonly Label _lblAutoHealHp = new() 
+    { 
+        Text = "Heal %:", 
+        AutoSize = true, 
+        Margin = new Padding(4, 10, 2, 4) 
+    };
+    
+    private readonly NumericUpDown _numAutoHealHp = new() 
+    { 
+        Minimum = 30, 
+        Maximum = 90, 
+        Value = 70, 
+        Width = 50, 
+        Margin = new Padding(2, 6, 8, 4) 
+    };
+    
     // Events public
     public event Action? SendUsernameRequested;
     public event Action? SendPasswordRequested;
@@ -679,6 +696,8 @@ public class StatsForm : Form
             autoFlow.Controls.Add(_numGongHp);
             autoFlow.Controls.Add(_lblCriticalHp);
             autoFlow.Controls.Add(_numCriticalHp);
+            autoFlow.Controls.Add(_lblAutoHealHp);  // Add auto-heal threshold label
+            autoFlow.Controls.Add(_numAutoHealHp);  // Add auto-heal threshold control
 
             _buttonPanel.Controls.Add(autoFlow);
             _buttonPanel.Controls.Add(loginFlow);
@@ -785,6 +804,7 @@ public class StatsForm : Form
         _chkAutoHeal.CheckedChanged += (_, _) => _profile.Features.AutoHeal = _chkAutoHeal.Checked;
         _numGongHp.ValueChanged += (_, _) => _profile.Thresholds.GongMinHpPercent = (int)_numGongHp.Value;
         _numCriticalHp.ValueChanged += (_, _) => _profile.Thresholds.CriticalHpPercent = (int)_numCriticalHp.Value;
+        _numAutoHealHp.ValueChanged += (_, _) => _profile.Thresholds.AutoHealHpPercent = (int)_numAutoHealHp.Value; // Add auto-heal threshold handler
         
         // Initialize control values from profile
         _chkAutoGong.Checked = _profile.Features.AutoGong;
@@ -794,6 +814,7 @@ public class StatsForm : Form
         _chkAutoHeal.Checked = _profile.Features.AutoHeal;
         _numGongHp.Value = _profile.Thresholds.GongMinHpPercent;
         _numCriticalHp.Value = _profile.Thresholds.CriticalHpPercent;
+        _numAutoHealHp.Value = _profile.Thresholds.AutoHealHpPercent; // Initialize auto-heal threshold value
     }
 
     private void SetupContextMenus()
