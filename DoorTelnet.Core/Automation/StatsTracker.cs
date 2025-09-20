@@ -24,6 +24,25 @@ public class StatsTracker
         get { lock (_sync) return MaxHp > 0 ? (double)Hp / MaxHp : 1.0; }
     }
 
+    // CLI proven pattern: [Hp=###/Mp=###/Mv=###(/At=###)?(/Ac=###)? (state)?]
+    private readonly Regex _statsRegex = new(@"\[Hp=(?<hp>\d+)/Mp=(?<mp>\d+)/Mv=(?<mv>\d+)(?:/At=(?<at>\d+))?(?:/Ac=(?<ac>\d+))?(?: \((?<state>resting|healing)\))?\]", RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
+    /// <summary>
+    /// Attempt to parse a line; returns true if it matched the stats line pattern.
+    /// </summary>
+    public bool ParseIfStatsLine(string line)
+    {
+        return TryParseLine(line, _statsRegex);
+    }
+
+    public (int hp, int max, int mp, int mv, int at, int ac, string? state) GetSnapshot()
+    {
+        lock (_sync)
+        {
+            return (Hp, MaxHp, Mp, Mv, At, Ac, State);
+        }
+    }
+
     public bool TryParseLine(string line, Regex regex)
     {
         if (string.IsNullOrWhiteSpace(line)) return false;
@@ -33,12 +52,20 @@ public class StatsTracker
         bool changed = false;
         lock (_sync)
         {
-            if (int.TryParse(m.Groups["hp"].Value, out var hp)) { if (hp > MaxHp) { MaxHp = hp; changed = true; } if (hp != Hp) { Hp = hp; changed = true; } }
+            if (int.TryParse(m.Groups["hp"].Value, out var hp)) { if (hp != Hp) { Hp = hp; changed = true; } if (hp > MaxHp) { MaxHp = hp; changed = true; } }
             if (int.TryParse(m.Groups["mp"].Value, out var mp)) { if (mp != Mp) { Mp = mp; changed = true; } }
             if (int.TryParse(m.Groups["mv"].Value, out var mv)) { if (mv != Mv) { Mv = mv; changed = true; } }
-            var at = (m.Groups["at"].Success && int.TryParse(m.Groups["at"].Value, out var atv)) ? atv : 0; if (at != At) { At = at; changed = true; }
-            var ac = (m.Groups["ac"].Success && int.TryParse(m.Groups["ac"].Value, out var acv)) ? acv : 0; if (ac != Ac) { Ac = ac; changed = true; }
-            var state = m.Groups["state"].Success ? m.Groups["state"].Value : null; if (state != State) { State = state; changed = true; }
+            if (m.Groups["at"].Success && int.TryParse(m.Groups["at"].Value, out var atv)) { if (atv != At) { At = atv; changed = true; } }
+            if (m.Groups["ac"].Success && int.TryParse(m.Groups["ac"].Value, out var acv)) { if (acv != Ac) { Ac = acv; changed = true; } }
+            if (m.Groups["state"].Success)
+            {
+                var state = m.Groups["state"].Value;
+                if (state != State) { State = state; changed = true; }
+            }
+            else if (State != null)
+            {
+                State = null; changed = true;
+            }
         }
         if (changed) Updated?.Invoke();
         return true;

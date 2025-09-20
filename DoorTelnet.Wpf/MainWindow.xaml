@@ -1,0 +1,120 @@
+﻿<Window x:Class="DoorTelnet.Wpf.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:controls="clr-namespace:DoorTelnet.Wpf.Controls"
+        xmlns:views="clr-namespace:DoorTelnet.Wpf.Views"
+        mc:Ignorable="d"
+        Title="DoorTelnet" Height="650" Width="1150" MinWidth="900" MinHeight="550"
+        Background="{StaticResource Brush.Background}">
+    <DockPanel>
+        <!-- Top bar (replaces ToolBar to remove grip & overflow) -->
+        <Border DockPanel.Dock="Top" Background="{StaticResource Brush.Panel}" BorderBrush="{StaticResource Brush.Border}" BorderThickness="0,0,0,1" Padding="6,4" SnapsToDevicePixels="True">
+            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                <Button Width="105" Content="{Binding ConnectButtonText}" Command="{Binding ToggleConnectionCommand}" />
+            </StackPanel>
+        </Border>
+
+        <!-- Status bar bottom -->
+        <StatusBar DockPanel.Dock="Bottom">
+            <!-- Stats summary on far left -->
+            <StatusBarItem>
+                <TextBlock>
+                    <Run Text="HP:"/><Run Text="{Binding Stats.Hp, Mode=OneWay}"/><Run Text="/"/><Run Text="{Binding Stats.MaxHp, Mode=OneWay}"/>
+                    <Run Text="  MP:"/><Run Text="{Binding Stats.Mp, Mode=OneWay}"/>
+                    <Run Text="  MV:"/><Run Text="{Binding Stats.Mv, Mode=OneWay}"/>
+                    <Run Text="  AT:"/><Run Text="{Binding Stats.At, Mode=OneWay}"/>
+                    <Run Text="  AC:"/><Run Text="{Binding Stats.Ac, Mode=OneWay}"/>
+                    <Run Text="  "/><Run Text="{Binding Stats.State, Mode=OneWay}"/>
+                </TextBlock>
+            </StatusBarItem>
+            <StatusBarItem>
+                <TextBlock Text="|" Margin="6,0" />
+            </StatusBarItem>
+            <StatusBarItem>
+                <TextBlock Text="DoorTelnet WPF" />
+            </StatusBarItem>
+            <StatusBarItem HorizontalAlignment="Right">
+                <TextBlock Text="{Binding ConnectionStatus}" />
+            </StatusBarItem>
+        </StatusBar>
+
+        <!-- Two-column main layout: Terminal (left) / Right column (panels + log) -->
+        <Grid Margin="6">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="7*" />
+                <ColumnDefinition Width="3*" />
+            </Grid.ColumnDefinitions>
+
+            <!-- Terminal full height -->
+            <Border Style="{StaticResource PanelBorderStyle}" Margin="0,0,6,0" Grid.Column="0">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                    </Grid.RowDefinitions>
+                    <DockPanel Grid.Row="0" LastChildFill="False" Margin="0,0,0,6">
+                        <TextBlock Text="Terminal" FontWeight="Bold" />
+                    </DockPanel>
+                    <controls:TerminalControl Grid.Row="1" />
+                </Grid>
+            </Border>
+
+            <!-- Right column with stacked info panels on top and log taking remaining space -->
+            <Grid Grid.Column="1">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="*" />
+                </Grid.RowDefinitions>
+
+                <Border Style="{StaticResource PanelBorderStyle}" Margin="0,0,0,6" Grid.Row="0">
+                    <views:StatsView DataContext="{Binding Stats}" />
+                </Border>
+
+                <Border Style="{StaticResource PanelBorderStyle}" Margin="0,0,0,6" Grid.Row="1">
+                    <StackPanel>
+                        <TextBlock Text="Room" FontWeight="Bold" Margin="0,0,0,4" />
+                        <TextBlock Text="Room Placeholder" Foreground="{StaticResource Brush.TextMuted}" />
+                    </StackPanel>
+                </Border>
+
+                <Border Style="{StaticResource PanelBorderStyle}" Margin="0,0,0,6" Grid.Row="2">
+                    <StackPanel>
+                        <TextBlock Text="Combat" FontWeight="Bold" Margin="0,0,0,4" />
+                        <TextBlock Text="Combat Placeholder" Foreground="{StaticResource Brush.TextMuted}" />
+                    </StackPanel>
+                </Border>
+
+                <Border Style="{StaticResource PanelBorderStyle}" Margin="0,0,0,6" Grid.Row="3">
+                    <StackPanel>
+                        <TextBlock Text="Automation" FontWeight="Bold" Margin="0,0,0,4" />
+                        <TextBlock Text="Future scripting / triggers UI" Foreground="{StaticResource Brush.TextMuted}" />
+                    </StackPanel>
+                </Border>
+
+                <!-- Log occupies remaining vertical space -->
+                <Border Style="{StaticResource PanelBorderStyle}" Grid.Row="4">
+                    <Grid>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="*" />
+                        </Grid.RowDefinitions>
+                        <TextBlock Text="Session Log" FontWeight="Bold" />
+                        <Border Grid.Row="1" Background="#202020" CornerRadius="2" BorderBrush="#333" BorderThickness="1" Margin="0,6,0,0">
+                            <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                                <StackPanel Margin="4">
+                                    <TextBlock Text="Log Placeholder" Foreground="{StaticResource Brush.TextMuted}" />
+                                    <TextBlock Text="Real-time log entries will appear here." Foreground="{StaticResource Brush.TextMuted}" />
+                                </StackPanel>
+                            </ScrollViewer>
+                        </Border>
+                    </Grid>
+                </Border>
+            </Grid>
+        </Grid>
+    </DockPanel>
+</Window>

@@ -46,6 +46,8 @@ public class TelnetClient
     private long _printableTotal;
     private int _diagPreviewCount;
 
+    private readonly StatsTracker? _statsTracker;
+
     public int InterKeyDelayMs
     {
         get => _scriptEngine.InterKeyDelayMs;
@@ -60,7 +62,8 @@ public class TelnetClient
         ILogger<TelnetClient> logger,
         bool diagnostics = false,
         bool rawEcho = false,
-        bool dumbMode = false)
+        bool dumbMode = false,
+        StatsTracker? statsTracker = null)
     {
         _screen = scriptEngine
             .GetType()
@@ -78,6 +81,17 @@ public class TelnetClient
         _diagnostics = diagnostics;
         _rawEcho = rawEcho;
         _dumbMode = dumbMode;
+        _statsTracker = statsTracker;
+        LineReceived += HandleLineReceived;
+    }
+
+    private void HandleLineReceived(string line)
+    {
+        try
+        {
+            _statsTracker?.ParseIfStatsLine(line);
+        }
+        catch { }
     }
 
     public async Task ConnectAsync(string host, int port, CancellationToken cancellationToken = default)
@@ -342,6 +356,27 @@ public class TelnetClient
         payload.Clear();
         var text = _screen.ToText();
         _ruleEngine.Evaluate(text);
+
+        if (_statsTracker != null)
+        {
+            // Stats tracking - send lines to StatsTracker if it's available
+            foreach (var line in text.Split('\n'))
+            {
+                if (!string.IsNullOrWhiteSpace(line))
+                {
+                    // Using reflection to call the ParseIfStatsLine method
+                    try
+                    {
+                        var method = _statsTracker.GetType().GetMethod("ParseIfStatsLine", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public);
+                        method?.Invoke(_statsTracker, new object[] { line });
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogError(ex, "Error processing stats line");
+                    }
+                }
+            }
+        }
     }
 
     /// <summary>

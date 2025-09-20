@@ -1,10 +1,11 @@
 using System.Text;
+using System.Collections.Generic;
 
 namespace DoorTelnet.Core.Terminal;
 
 /// <summary>
 /// Represents a simple virtual terminal screen buffer.
-/// Now supports snapshots, resizing, thread-safe operations, and scrolling.
+/// Now supports snapshots, resizing, thread-safe operations, scrolling, dirty line tracking and scrollback.
 /// </summary>
 public class ScreenBuffer
 {
@@ -27,6 +28,23 @@ public class ScreenBuffer
     /// </summary>
     public static bool EnhancedStatsLineCleaning { get; set; } = true;
 
+    // Dirty tracking
+    private readonly HashSet<int> _dirtyLines = new();
+
+    // Scrollback
+    private readonly List<(char ch, CellAttribute attr)[]> _scrollback = new();
+    public int MaxScrollbackLines { get; set; } = 2000;
+
+    /// <summary>
+    /// Fired when one or more lines have changed. Provides dirty line indices relative to the visible buffer.
+    /// </summary>
+    public event Action<HashSet<int>>? LinesChanged;
+
+    /// <summary>
+    /// Fired when the buffer is resized (full redraw advisable).
+    /// </summary>
+    public event Action? Resized;
+
     public ScreenBuffer(int columns, int rows)
     {
         Columns = columns;
@@ -38,6 +56,7 @@ public class ScreenBuffer
 
     public void ClearAll()
     {
+        HashSet<int>? changed;
         lock (_sync)
         {
             for (int y = 0; y < Rows; y++)
@@ -47,76 +66,126 @@ public class ScreenBuffer
                     _attrs[y, x] = CellAttribute.Default;
                 }
             CursorX = 0; CursorY = 0;
+            MarkAllDirty_NoLock();
+            changed = ConsumeDirtyLines_NoLock();
         }
+        if (changed != null) LinesChanged?.Invoke(changed);
     }
 
     public void PutChar(char c)
     {
+        HashSet<int>? changed = null;
         lock (_sync)
         {
             if (c == '\n')
             {
-                CursorY++; CursorX = 0; ScrollIfNeeded(); return;
+                CursorY++;
+                CursorX = 0;
+                ScrollIfNeeded_NoLock();
+                MarkDirtyLine_NoLock(CursorY);
+                changed = ConsumeDirtyLines_NoLock();
             }
-            if (c == '\r') { CursorX = 0; return; }
-            if (c == '\b' || c == (char)0x7F)
+            else if (c == '\r')
             {
-                // destructive backspace
+                CursorX = 0;
+            }
+            else if (c == '\b' || c == (char)0x7F)
+            {
                 if (CursorX > 0) CursorX--; else if (CursorY > 0) { CursorY--; CursorX = Columns - 1; }
                 if (CursorX >= 0 && CursorY >= 0 && CursorX < Columns && CursorY < Rows)
                 {
                     _chars[CursorY, CursorX] = ' ';
                     _attrs[CursorY, CursorX] = CellAttribute.Default;
+                    MarkDirtyLine_NoLock(CursorY);
+                    changed = ConsumeDirtyLines_NoLock();
                 }
-                return;
             }
-
-            if (CursorX >= 0 && CursorX < Columns && CursorY >= 0 && CursorY < Rows)
+            else
             {
-                _chars[CursorY, CursorX] = c;
-                _attrs[CursorY, CursorX] = CurrentAttribute;
+                if (CursorX >= 0 && CursorX < Columns && CursorY >= 0 && CursorY < Rows)
+                {
+                    _chars[CursorY, CursorX] = c;
+                    _attrs[CursorY, CursorX] = CurrentAttribute;
+                    MarkDirtyLine_NoLock(CursorY);
+                }
+                CursorX++;
+                if (CursorX >= Columns)
+                {
+                    CursorX = 0;
+                    CursorY++;
+                }
+                ScrollIfNeeded_NoLock();
+                changed = ConsumeDirtyLines_NoLock();
             }
-            CursorX++;
-            if (CursorX >= Columns) { CursorX = 0; CursorY++; }
-            ScrollIfNeeded();
         }
+        if (changed != null) LinesChanged?.Invoke(changed);
     }
 
-    private void ScrollIfNeeded()
+    private void ScrollIfNeeded_NoLock()
     {
         if (CursorY < Rows) return;
-        // scroll up by one line
+        var lineCopy = new (char ch, CellAttribute attr)[Columns];
+        for (int x = 0; x < Columns; x++)
+        {
+            lineCopy[x] = (_chars[0, x], _attrs[0, x]);
+        }
+        _scrollback.Add(lineCopy);
+        if (_scrollback.Count > MaxScrollbackLines)
+        {
+            _scrollback.RemoveAt(0);
+        }
         for (int y = 1; y < Rows; y++)
             for (int x = 0; x < Columns; x++)
             {
                 _chars[y - 1, x] = _chars[y, x];
                 _attrs[y - 1, x] = _attrs[y, x];
             }
-        // clear last line
         for (int x = 0; x < Columns; x++)
         {
             _chars[Rows - 1, x] = ' ';
             _attrs[Rows - 1, x] = CellAttribute.Default;
         }
         CursorY = Rows - 1;
+        MarkAllDirty_NoLock();
+    }
+
+    private void MarkDirtyLine_NoLock(int y)
+    {
+        if (y >= 0 && y < Rows) _dirtyLines.Add(y);
+    }
+
+    private void MarkAllDirty_NoLock()
+    {
+        _dirtyLines.Clear();
+        for (int y = 0; y < Rows; y++) _dirtyLines.Add(y);
+    }
+
+    private HashSet<int>? ConsumeDirtyLines_NoLock()
+    {
+        if (_dirtyLines.Count == 0) return null;
+        var copy = new HashSet<int>(_dirtyLines);
+        _dirtyLines.Clear();
+        return copy;
     }
 
     public void MoveCursor(int x, int y)
     {
+        HashSet<int>? changed = null;
         lock (_sync)
         {
             CursorX = Math.Clamp(x, 0, Columns - 1);
             CursorY = Math.Clamp(y, 0, Rows - 1);
+            MarkDirtyLine_NoLock(CursorY);
+            changed = ConsumeDirtyLines_NoLock();
         }
+        if (changed != null) LinesChanged?.Invoke(changed);
     }
 
-    public void MoveRel(int dx, int dy)
-    {
-        MoveCursor(CursorX + dx, CursorY + dy);
-    }
+    public void MoveRel(int dx, int dy) => MoveCursor(CursorX + dx, CursorY + dy);
 
     public void EraseToEndOfLine()
     {
+        HashSet<int>? changed;
         lock (_sync)
         {
             for (int x = CursorX; x < Columns; x++)
@@ -124,11 +193,15 @@ public class ScreenBuffer
                 _chars[CursorY, x] = ' ';
                 _attrs[CursorY, x] = CellAttribute.Default;
             }
+            MarkDirtyLine_NoLock(CursorY);
+            changed = ConsumeDirtyLines_NoLock();
         }
+        if (changed != null) LinesChanged?.Invoke(changed);
     }
 
     public void EraseFromStartOfLine()
     {
+        HashSet<int>? changed;
         lock (_sync)
         {
             for (int x = 0; x <= CursorX; x++)
@@ -136,11 +209,15 @@ public class ScreenBuffer
                 _chars[CursorY, x] = ' ';
                 _attrs[CursorY, x] = CellAttribute.Default;
             }
+            MarkDirtyLine_NoLock(CursorY);
+            changed = ConsumeDirtyLines_NoLock();
         }
+        if (changed != null) LinesChanged?.Invoke(changed);
     }
 
     public void EraseLine()
     {
+        HashSet<int>? changed;
         lock (_sync)
         {
             for (int x = 0; x < Columns; x++)
@@ -148,7 +225,10 @@ public class ScreenBuffer
                 _chars[CursorY, x] = ' ';
                 _attrs[CursorY, x] = CellAttribute.Default;
             }
+            MarkDirtyLine_NoLock(CursorY);
+            changed = ConsumeDirtyLines_NoLock();
         }
+        if (changed != null) LinesChanged?.Invoke(changed);
     }
 
     /// <summary>
@@ -156,26 +236,21 @@ public class ScreenBuffer
     /// </summary>
     public void EraseToEndOfLineEnhanced()
     {
+        HashSet<int>? changed;
         lock (_sync)
         {
-            // Get the current line to check for stats patterns
             var currentLine = GetLine(CursorY);
             bool isStatsLine = currentLine.Contains("Hp=") || currentLine.Contains("Mp=") ||
-                             currentLine.Contains("Mv=") || currentLine.Contains("Ac=") ||
-                             currentLine.Contains("At=");
-
+                               currentLine.Contains("Mv=") || currentLine.Contains("Ac=") ||
+                               currentLine.Contains("At=");
             if (isStatsLine)
             {
-                // For stats lines, be more aggressive about cleaning to prevent artifacts
-                // Look for common patterns that indicate timer artifacts
                 var patterns = new[] { "/Ac=", "/At=", "Ac=", "At=" };
-
                 foreach (var pattern in patterns)
                 {
                     int patternStart = currentLine.IndexOf(pattern);
                     if (patternStart >= 0)
                     {
-                        // Find the end of this pattern (either ] or space or end of line)
                         int cleanStart = patternStart;
                         for (int i = patternStart; i < currentLine.Length; i++)
                         {
@@ -185,25 +260,19 @@ public class ScreenBuffer
                                 break;
                             }
                         }
-
-                        // Clear from this point to end of line to remove artifacts
                         for (int x = cleanStart; x < Columns; x++)
                         {
                             _chars[CursorY, x] = ' ';
                             _attrs[CursorY, x] = CellAttribute.Default;
                         }
-
-                        // Optional: Could add logging here for debugging
-                        // System.Diagnostics.Debug.WriteLine($"Enhanced cleaning triggered for pattern '{pattern}' at position {patternStart}");
-                        return;
+                        MarkDirtyLine_NoLock(CursorY);
+                        changed = ConsumeDirtyLines_NoLock();
+                        goto END;
                     }
                 }
-
-                // Fallback: Find the end of the stats bracket and clean after it
                 int bracketEnd = currentLine.IndexOf(']');
                 if (bracketEnd >= 0)
                 {
-                    // Clear from after the bracket to end of line
                     for (int x = bracketEnd + 1; x < Columns; x++)
                     {
                         _chars[CursorY, x] = ' ';
@@ -212,7 +281,6 @@ public class ScreenBuffer
                 }
                 else
                 {
-                    // Standard erase to end of line
                     for (int x = CursorX; x < Columns; x++)
                     {
                         _chars[CursorY, x] = ' ';
@@ -222,41 +290,49 @@ public class ScreenBuffer
             }
             else
             {
-                // Standard erase to end of line for non-stats lines
                 for (int x = CursorX; x < Columns; x++)
                 {
                     _chars[CursorY, x] = ' ';
                     _attrs[CursorY, x] = CellAttribute.Default;
                 }
             }
+            MarkDirtyLine_NoLock(CursorY);
+            changed = ConsumeDirtyLines_NoLock();
         }
+    END:
+        if (changed != null) LinesChanged?.Invoke(changed);
     }
 
     public void EraseInDisplay(int mode)
     {
+        HashSet<int>? changed;
         lock (_sync)
         {
             switch (mode)
             {
-                case 0: // to end
+                case 0:
                     for (int y = CursorY; y < Rows; y++)
                     {
                         int start = y == CursorY ? CursorX : 0;
                         for (int x = start; x < Columns; x++) { _chars[y, x] = ' '; _attrs[y, x] = CellAttribute.Default; }
+                        MarkDirtyLine_NoLock(y);
                     }
                     break;
-                case 1: // from start
+                case 1:
                     for (int y = 0; y <= CursorY; y++)
                     {
                         int end = y == CursorY ? CursorX : Columns - 1;
                         for (int x = 0; x <= end; x++) { _chars[y, x] = ' '; _attrs[y, x] = CellAttribute.Default; }
+                        MarkDirtyLine_NoLock(y);
                     }
                     break;
-                case 2: // all
+                case 2:
                     ClearAll();
-                    break;
+                    return;
             }
+            changed = ConsumeDirtyLines_NoLock();
         }
+        if (changed != null) LinesChanged?.Invoke(changed);
     }
 
     public void EraseInLine(int mode)
@@ -279,29 +355,38 @@ public class ScreenBuffer
 
     public void SetAttribute(params int[] codes)
     {
+        HashSet<int>? changed;
         lock (_sync)
         {
             if (codes.Length == 0)
             {
-                CurrentAttribute = CellAttribute.Default; return;
+                CurrentAttribute = CellAttribute.Default;
+                MarkDirtyLine_NoLock(CursorY);
+                changed = ConsumeDirtyLines_NoLock();
             }
-            var attr = CurrentAttribute;
-            foreach (var c in codes)
+            else
             {
-                if (c == 0) attr = CellAttribute.Default;
-                else if (c == 1) attr.Bold = true;
-                else if (c == 22) attr.Bold = false;  // Reset bold
-                else if (c == 4) attr.Underline = true;
-                else if (c == 24) attr.Underline = false;  // Reset underline
-                else if (c == 7) attr.Inverse = true;
-                else if (c == 27) attr.Inverse = false;  // Reset inverse
-                else if (c >= 30 && c <= 37) attr.Fg = c - 30;
-                else if (c == 39) attr.Fg = -1;
-                else if (c >= 40 && c <= 47) attr.Bg = c - 40;
-                else if (c == 49) attr.Bg = -1;
+                var attr = CurrentAttribute;
+                foreach (var c in codes)
+                {
+                    if (c == 0) attr = CellAttribute.Default;
+                    else if (c == 1) attr.Bold = true;
+                    else if (c == 22) attr.Bold = false;
+                    else if (c == 4) attr.Underline = true;
+                    else if (c == 24) attr.Underline = false;
+                    else if (c == 7) attr.Inverse = true;
+                    else if (c == 27) attr.Inverse = false;
+                    else if (c >= 30 && c <= 37) attr.Fg = c - 30;
+                    else if (c == 39) attr.Fg = -1;
+                    else if (c >= 40 && c <= 47) attr.Bg = c - 40;
+                    else if (c == 49) attr.Bg = -1;
+                }
+                CurrentAttribute = attr;
+                MarkDirtyLine_NoLock(CursorY);
+                changed = ConsumeDirtyLines_NoLock();
             }
-            CurrentAttribute = attr;
         }
+        if (changed != null) LinesChanged?.Invoke(changed);
     }
 
     public string ToText()
@@ -330,6 +415,14 @@ public class ScreenBuffer
         }
     }
 
+    public IEnumerable<(char ch, CellAttribute attr)[]> GetScrollback()
+    {
+        lock (_sync)
+        {
+            return _scrollback.ToArray();
+        }
+    }
+
     public (int x, int y) GetCursor()
     {
         lock (_sync) return (CursorX, CursorY);
@@ -337,9 +430,14 @@ public class ScreenBuffer
 
     public void Resize(int newCols, int newRows)
     {
+        HashSet<int>? changed;
+        bool resized = false;
         lock (_sync)
         {
-            if (newCols == Columns && newRows == Rows) return;
+            if (newCols == Columns && newRows == Rows)
+            {
+                return;
+            }
             var newChars = new char[newRows, newCols];
             var newAttrs = new CellAttribute[newRows, newCols];
             for (int y = 0; y < newRows; y++)
@@ -362,7 +460,12 @@ public class ScreenBuffer
             Rows = newRows;
             if (CursorX >= Columns) CursorX = Columns - 1;
             if (CursorY >= Rows) CursorY = Rows - 1;
+            MarkAllDirty_NoLock();
+            changed = ConsumeDirtyLines_NoLock();
+            resized = true;
         }
+        if (resized) Resized?.Invoke();
+        if (changed != null) LinesChanged?.Invoke(changed);
     }
 
     public char GetChar(int x, int y)
