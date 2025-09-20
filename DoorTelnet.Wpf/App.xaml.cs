@@ -1,5 +1,6 @@
 ﻿using System;
 using System.IO;
+using System.Text.RegularExpressions;
 using System.Windows;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -112,6 +113,69 @@ public partial class App : Application
                         {
                             roomTracker.AddLine(line);
                             combatTracker.ProcessLine(line);
+                            // --- Begin PlayerProfile population logic ---
+                            var profile = sp.GetRequiredService<PlayerProfile>();
+                            // Detect spells listing: assume lines like "nick - Long Name (Sphere) mana:## diff:##"
+                            var spellMatch = Regex.Match(line, @"^(?<nick>[a-zA-Z]+)\s+[-:]\s+(?<long>[^()]+)\((?<sphere>[^)]+)\)\s+mana:?\s*(?<mana>\d+)\s+diff:?\s*(?<diff>\d+)", RegexOptions.IgnoreCase);
+                            if (spellMatch.Success)
+                            {
+                                var nick = spellMatch.Groups["nick"].Value.Trim();
+                                profile.AddOrUpdateSpell(new SpellInfo
+                                {
+                                    Nick = nick,
+                                    LongName = spellMatch.Groups["long"].Value.Trim(),
+                                    Sphere = spellMatch.Groups["sphere"].Value.Trim(),
+                                    Mana = int.Parse(spellMatch.Groups["mana"].Value),
+                                    Diff = int.Parse(spellMatch.Groups["diff"].Value)
+                                });
+                            }
+                            // Inventory lines: simple heuristic for lines starting with item names (very loose)
+                            var invMatch = Regex.Match(line, @"^\s*(?:\d+\)|-\s+|\*\s+)?(?:(?:an?|the)\s+)?(?<name>[A-Za-z][A-Za-z' \-]{2,})$" );
+                            if (invMatch.Success && line.Length < 60 && !line.Contains(":"))
+                            {
+                                var itemName = invMatch.Groups["name"].Value.Trim();
+                                if (!string.IsNullOrWhiteSpace(itemName)) profile.AddInventoryItem(itemName);
+                            }
+                            // Heals list: pattern short -> spell (heals:###)
+                            var healMatch = Regex.Match(line, @"^(?<short>[A-Za-z]+)\s*->\s*(?<spell>[A-Za-z ]+)\s*\(heals:?\s*(?<amt>\d+)\)", RegexOptions.IgnoreCase);
+                            if (healMatch.Success)
+                            {
+                                var sh = healMatch.Groups["short"].Value.Trim();
+                                profile.AddHeal(new HealSpell
+                                {
+                                    Short = sh,
+                                    Spell = healMatch.Groups["spell"].Value.Trim(),
+                                    Heals = int.Parse(healMatch.Groups["amt"].Value)
+                                });
+                            }
+                            // Shields list: assume lines like "shield: <spellname>" or standalone shield spell names
+                            var shieldMatch = Regex.Match(line, @"(shield|aegis|barrier)\b", RegexOptions.IgnoreCase);
+                            if (shieldMatch.Success)
+                            {
+                                var shName = shieldMatch.Value.Trim();
+                                profile.AddShield(shName);
+                            }
+                            // Character basic stats block detection; simple capture of name/class on line like "Name : Bob    Class : Cleric"
+                            var nameClassMatch = Regex.Match(line, @"Name\s*:\s*(?<nm>[A-Za-z][A-Za-z]+).*Class\s*:\s*(?<cls>[A-Za-z]+)", RegexOptions.IgnoreCase);
+                            if (nameClassMatch.Success)
+                            {
+                                profile.SetNameClass(nameClassMatch.Groups["nm"].Value.Trim(), nameClassMatch.Groups["cls"].Value.Trim());
+                            }
+                            // Detect shield fade/cast lines
+                            if (Regex.IsMatch(line, @"shield fades", RegexOptions.IgnoreCase)) profile.SetShielded(false);
+                            if (Regex.IsMatch(line, @"You are surrounded by a magical shield", RegexOptions.IgnoreCase)) profile.SetShielded(true);
+                            // AutoAttack: on seeing a monster engaged message if flag set
+                            if (profile.Features.AutoAttack && Regex.IsMatch(line, @"^You see (?:an?|the) ([A-Za-z' -]+) here\.", RegexOptions.IgnoreCase))
+                            {
+                                var mob = Regex.Match(line, @"^You see (?:an?|the) (?<m>[A-Za-z' -]+) here", RegexOptions.IgnoreCase).Groups["m"].Value.Trim();
+                                if (!string.IsNullOrWhiteSpace(mob)) client.SendCommand($"kill {mob.Split(' ')[0]}");
+                            }
+                            // AutoRing placeholder (if AutoRing just ring bell/gong variant)
+                            if (profile.Features.AutoRing && Regex.IsMatch(line, @"^The gong reverberates", RegexOptions.IgnoreCase))
+                            {
+                                client.SendCommand("ring gong");
+                            }
+                            // --- End PlayerProfile population logic ---
                             if (!initialCommandsSent)
                             {
                                 var chk = line.Trim();
@@ -141,10 +205,14 @@ public partial class App : Application
                     return client;
                 });
 
+                services.AddSingleton<PlayerProfile>();
+                services.AddSingleton<AutomationFeatureService>();
+
                 // ViewModels / dialogs
                 services.AddTransient<SettingsViewModel>();
                 services.AddTransient<CredentialsViewModel>();
                 services.AddTransient<CharacterProfilesViewModel>();
+                services.AddTransient<CharacterSheetViewModel>();
 
                 services.AddSingleton<StatsViewModel>();
                 services.AddSingleton<RoomViewModel>();
@@ -153,6 +221,8 @@ public partial class App : Application
 
                 services.AddSingleton<MainWindow>(sp =>
                 {
+                    // Force automation service creation (hooks Telnet events)
+                    _ = sp.GetRequiredService<AutomationFeatureService>();
                     var w = new MainWindow { DataContext = sp.GetRequiredService<MainViewModel>() };
                     var settings = sp.GetRequiredService<ISettingsService>();
                     var ui = settings.Get().UI;

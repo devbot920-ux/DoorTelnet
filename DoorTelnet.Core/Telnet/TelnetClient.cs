@@ -37,6 +37,7 @@ public class TelnetClient
 
     private readonly StringBuilder _currentLine = new();
     public event Action<string>? LineReceived;
+    public event Action<string>? ConnectionFailed;
 
     // Telnet command accumulation
     private readonly List<byte> _iacPending = new();
@@ -118,13 +119,36 @@ public class TelnetClient
 
     public async Task ConnectAsync(string host, int port, CancellationToken cancellationToken = default)
     {
-        _tcp = new TcpClient
+        _tcp = new TcpClient { NoDelay = true };
+        try
         {
-            NoDelay = true
-        };
-        await _tcp.ConnectAsync(host, port, cancellationToken);
-        _stream = _tcp.GetStream();
-        _logger.LogInformation("Connected to {host}:{port}", host, port);
+            await _tcp.ConnectAsync(host, port, cancellationToken);
+            _stream = _tcp.GetStream();
+            _logger.LogInformation("Connected to {host}:{port}", host, port);
+        }
+        catch (SocketException sx)
+        {
+            _logger.LogWarning(sx, "Connection attempt to {host}:{port} failed (socket error {code})", host, port, sx.SocketErrorCode);
+            SafeFail($"Connection failed: {sx.SocketErrorCode}. Host may be unreachable or timed out.");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Connection attempt to {host}:{port} failed", host, port);
+            SafeFail($"Connection failed: {ex.Message}");
+        }
+    }
+
+    private void SafeFail(string message)
+    {
+        try
+        {
+            _stream?.Dispose();
+            _tcp?.Close();
+        }
+        catch { }
+        _stream = null;
+        _tcp = null;
+        ConnectionFailed?.Invoke(message);
     }
 
     public Task StartAsync(CancellationToken cancellationToken = default)

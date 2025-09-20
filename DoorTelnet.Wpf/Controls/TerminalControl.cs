@@ -4,6 +4,7 @@ using System.Linq;
 using System.Text;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Media;
 using DoorTelnet.Core.Terminal;
@@ -14,17 +15,15 @@ using Microsoft.Extensions.Configuration;
 
 namespace DoorTelnet.Wpf.Controls;
 
-/// <summary>
-/// Enhanced terminal control (Stage 2 advanced):
-/// - Event driven redraw using ScreenBuffer.LinesChanged/Resized
-/// - Dirty line incremental rendering
-/// - Scrollback (PageUp/PageDown)
-/// - Cursor styles (underscore, block, pipe, hash, dot, plus) from config: terminal:cursorStyle
-/// - Text selection + copy (Ctrl+C / right-click copy)
-/// </summary>
-public class TerminalControl : FrameworkElement
+[TemplatePart(Name = "PART_VScroll", Type = typeof(System.Windows.Controls.Primitives.ScrollBar))]
+public class TerminalControl : Control
 {
-    // Font size DP for binding if needed
+    static TerminalControl()
+    {
+        DefaultStyleKeyProperty.OverrideMetadata(typeof(TerminalControl), new FrameworkPropertyMetadata(typeof(TerminalControl)));
+    }
+
+    // Font size DP
     public static readonly DependencyProperty TerminalFontSizeProperty = DependencyProperty.Register(
         nameof(TerminalFontSize), typeof(double), typeof(TerminalControl),
         new FrameworkPropertyMetadata(14.0, FrameworkPropertyMetadataOptions.AffectsRender, OnFontSizeChanged));
@@ -34,7 +33,7 @@ public class TerminalControl : FrameworkElement
         if (d is TerminalControl tc)
         {
             tc.MeasureFontMetrics();
-            tc.UpdateTerminalGeometry(); // auto recompute cols/rows on font size change
+            tc.UpdateTerminalGeometry();
             tc.InvalidateVisual();
         }
     }
@@ -50,23 +49,22 @@ public class TerminalControl : FrameworkElement
     private TelnetClient? _telnet;
     private IConfiguration? _config;
 
-    // Rendering
+    private ScrollBar _vScroll;
+
+    // Rendering metrics
     private Typeface _typeface = new("Consolas");
     private double _charWidth = 8;
     private double _charHeight = 16;
 
-    // Dirty tracking
-    private readonly HashSet<int> _dirtyLines = new();
     private bool _fullRedraw = true;
-    private bool _renderScheduled = false; // coalescing flag
+    private bool _renderScheduled;
     private DateTime _lastScheduled = DateTime.MinValue;
     private static readonly TimeSpan MinScheduleInterval = TimeSpan.FromMilliseconds(15);
 
-    // Snapshot cache
     private (char ch, ScreenBuffer.CellAttribute attr)[,]? _snapshot;
 
     // Scrollback
-    private int _scrollOffset = 0; // 0 = bottom (live), positive = lines above
+    private int _scrollOffset = 0; // lines from bottom
     private List<(char ch, ScreenBuffer.CellAttribute attr)[]> _scrollbackCache = new();
 
     // Cursor
@@ -76,16 +74,16 @@ public class TerminalControl : FrameworkElement
     private string _cursorStyle = "underscore";
 
     // Selection
-    private Point? _selectionAnchor; // cell coords
-    private Point? _selectionEnd; // cell coords
+    private Point? _selectionAnchor;
+    private Point? _selectionEnd;
     private bool _isSelecting;
-
-    // Performance
-    private const int MaxFps = 60;
-    private DateTime _lastRender = DateTime.MinValue;
 
     private DateTime _lastNaws = DateTime.MinValue;
     private static readonly TimeSpan NawsThrottle = TimeSpan.FromMilliseconds(400);
+
+    // Inertia scrolling
+    private double _scrollVelocity; // lines per frame (approx)
+    private bool _inertiaActive;
 
     public TerminalControl()
     {
@@ -95,7 +93,27 @@ public class TerminalControl : FrameworkElement
         SnapsToDevicePixels = true;
     }
 
-    #region Initialization
+    public override void OnApplyTemplate()
+    {
+        base.OnApplyTemplate();
+        _vScroll = GetTemplateChild("PART_VScroll") as ScrollBar;
+        if (_vScroll != null)
+        {
+            _vScroll.Minimum = 0;
+            _vScroll.SmallChange = 1;
+            _vScroll.LargeChange = 5;
+            _vScroll.ValueChanged += (s, e) =>
+            {
+                if (_suppressScrollEvent) return;
+                int val = (int)Math.Round(_vScroll.Value);
+                _scrollOffset = val;
+                InvalidateVisual();
+            };
+            UpdateScrollBar();
+        }
+    }
+
+    #region Init
     private void OnLoaded(object sender, RoutedEventArgs e)
     {
         ResolveDependencies();
@@ -104,12 +122,10 @@ public class TerminalControl : FrameworkElement
         ApplyConfig();
         InvalidateVisual();
         Focus();
+        Dispatcher.BeginInvoke(new Action(() => { UpdateTerminalGeometry(); ForceResizeNegotiation(); }), System.Windows.Threading.DispatcherPriority.Loaded);
     }
 
-    private void OnUnloaded(object? sender, RoutedEventArgs e)
-    {
-        UnhookBufferEvents();
-    }
+    private void OnUnloaded(object? sender, RoutedEventArgs e) => UnhookBufferEvents();
 
     private void ResolveDependencies()
     {
@@ -124,7 +140,7 @@ public class TerminalControl : FrameworkElement
             _config = host.Services.GetService<IConfiguration>();
         }
         _snapshot = _buffer?.Snapshot();
-        _scrollbackCache = _buffer?.GetScrollback().Select(line => line.ToArray()).ToList() ?? new();
+        _scrollbackCache = _buffer?.GetScrollback().Select(l => l.ToArray()).ToList() ?? new();
     }
 
     private void MeasureFontMetrics()
@@ -156,72 +172,44 @@ public class TerminalControl : FrameworkElement
 
     private void OnLinesChanged(HashSet<int> lines)
     {
-        lock (_dirtyLines)
+        if (_buffer == null) return;
+        lock (_dirtyLock)
         {
-            foreach (var l in lines)
-            {
-                _dirtyLines.Add(l);
-            }
-            // If a render is already scheduled, just accumulate
-            if (_renderScheduled)
-            {
-                return;
-            }
-            // Throttle scheduling to avoid overloading UI thread
+            foreach (var l in lines) _dirtyLines.Add(l);
+            if (_renderScheduled) return;
             var now = DateTime.UtcNow;
             if (now - _lastScheduled < MinScheduleInterval)
             {
-                // Delay scheduling slightly
                 _renderScheduled = true;
-                Dispatcher.BeginInvoke(new Action(() =>
-                {
-                    _renderScheduled = false;
-                    ProcessPendingLines();
-                }), System.Windows.Threading.DispatcherPriority.Background);
+                Dispatcher.BeginInvoke(new Action(ProcessPendingLines), System.Windows.Threading.DispatcherPriority.Background);
                 return;
             }
-            _lastScheduled = now;
-            _renderScheduled = true;
+            _lastScheduled = now; _renderScheduled = true;
         }
-        Dispatcher.BeginInvoke(new Action(() =>
-        {
-            _renderScheduled = false;
-            ProcessPendingLines();
-        }), System.Windows.Threading.DispatcherPriority.Render);
-    }
-
-    private void ProcessPendingLines()
-    {
-        // Snapshot & scrollback capture on UI thread to eliminate contention on worker thread
-        if (_buffer == null)
-        {
-            return;
-        }
-        _snapshot = _buffer.Snapshot();
-        _scrollbackCache = _buffer.GetScrollback().Select(l => l.ToArray()).ToList();
-        InvalidateVisual();
+        Dispatcher.BeginInvoke(new Action(ProcessPendingLines), System.Windows.Threading.DispatcherPriority.Render);
     }
 
     private void OnBufferResized()
     {
         _fullRedraw = true;
-        // Force snapshot refresh through the coalesced path
-        OnLinesChanged(new HashSet<int>(Enumerable.Range(0, _buffer?.Rows ?? 0)));
+        if (_buffer != null) OnLinesChanged(new HashSet<int>(Enumerable.Range(0, _buffer.Rows)));
     }
     #endregion
 
-    #region Rendering Helpers
-    private FormattedText CreateText(string s, Brush brush)
-    {
-        return new FormattedText(
-            s,
-            System.Globalization.CultureInfo.InvariantCulture,
-            FlowDirection.LeftToRight,
-            _typeface,
-            TerminalFontSize <= 0 ? 14 : TerminalFontSize,
-            brush,
-            VisualTreeHelper.GetDpi(this).PixelsPerDip);
-    }
+    #region Dirty Tracking
+    private readonly HashSet<int> _dirtyLines = new();
+    private readonly object _dirtyLock = new();
+    #endregion
+
+    #region Rendering
+    private FormattedText CreateText(string s, Brush brush) => new(
+        s,
+        System.Globalization.CultureInfo.InvariantCulture,
+        FlowDirection.LeftToRight,
+        _typeface,
+        TerminalFontSize <= 0 ? 14 : TerminalFontSize,
+        brush,
+        VisualTreeHelper.GetDpi(this).PixelsPerDip);
 
     protected override void OnRender(DrawingContext dc)
     {
@@ -231,124 +219,85 @@ public class TerminalControl : FrameworkElement
             dc.DrawRectangle(Brushes.Black, null, new Rect(RenderSize));
             return;
         }
+        double scrollBarWidth = (_vScroll != null && _vScroll.Visibility == Visibility.Visible) ? _vScroll.ActualWidth : 0;
 
-        // Cursor blink toggle
         var now = DateTime.UtcNow;
         if (now - _lastCursorToggle > _cursorBlinkInterval)
         {
             _cursorVisible = !_cursorVisible;
             _lastCursorToggle = now;
         }
-
-        // Fill background
         dc.DrawRectangle(Brushes.Black, null, new Rect(RenderSize));
 
         int rows = _buffer.Rows;
         int cols = _buffer.Columns;
         double padX = 2;
         double padY = 2;
+        double maxWidth = ActualWidth - scrollBarWidth - padX * 2;
+        int maxCols = Math.Min(cols, (int)(maxWidth / _charWidth));
 
-        // Determine visible lines considering scrollback
-        // scrollOffset = 0 => last rows of live buffer
-        // When positive, we overlay scrollback + visible live lines
         var visibleLines = new List<(int? bufferRow, (char ch, ScreenBuffer.CellAttribute attr)[]? scrollLine)>();
-
         if (_scrollOffset == 0)
         {
-            for (int r = 0; r < rows; r++)
-            {
-                visibleLines.Add((r, null));
-            }
+            for (int r = 0; r < rows; r++) visibleLines.Add((r, null));
         }
         else
         {
-            // Combine scrollback tail + current buffer top portion
-            int totalNeeded = rows;
-            // Start index in scrollback (from end)
             for (int i = _scrollOffset; i < _scrollOffset + rows; i++)
             {
                 int idx = _scrollbackCache.Count - 1 - i;
-                if (idx >= 0 && idx < _scrollbackCache.Count)
-                {
-                    visibleLines.Add((null, _scrollbackCache[idx]));
-                }
-                else
-                {
-                    visibleLines.Add((null, null));
-                }
+                if (idx >= 0 && idx < _scrollbackCache.Count) visibleLines.Add((null, _scrollbackCache[idx]));
+                else visibleLines.Add((null, null));
             }
         }
 
-        // Render lines
         double y = padY;
         for (int lineIndex = 0; lineIndex < visibleLines.Count && y + _charHeight <= ActualHeight; lineIndex++)
         {
             var (bufferRow, scrollLine) = visibleLines[lineIndex];
             (char ch, ScreenBuffer.CellAttribute attr)[] lineCells;
-
             if (bufferRow.HasValue)
             {
                 lineCells = new (char, ScreenBuffer.CellAttribute)[cols];
-                for (int c = 0; c < cols; c++)
-                {
-                    lineCells[c] = _snapshot[bufferRow.Value, c];
-                }
+                for (int c = 0; c < cols; c++) lineCells[c] = _snapshot[bufferRow.Value, c];
             }
-            else if (scrollLine != null)
-            {
-                lineCells = scrollLine;
-            }
-            else
-            {
-                lineCells = Enumerable.Repeat((' ', ScreenBuffer.CellAttribute.Default), cols).ToArray();
-            }
+            else if (scrollLine != null) lineCells = scrollLine;
+            else lineCells = Enumerable.Repeat((' ', ScreenBuffer.CellAttribute.Default), cols).ToArray();
 
             double x = padX;
             int col = 0;
-            while (col < lineCells.Length)
+            while (col < Math.Min(lineCells.Length, maxCols))
             {
                 var (ch, attr) = lineCells[col];
                 int start = col;
-                int fg = attr.Fg;
-                int bg = attr.Bg;
-                bool inverse = attr.Inverse;
-                bool bold = attr.Bold;
+                int fg = attr.Fg; int bg = attr.Bg;
+                bool inverse = attr.Inverse; bool bold = attr.Bold;
                 var sb = new StringBuilder();
-                while (col < lineCells.Length)
+                while (col < Math.Min(lineCells.Length, maxCols))
                 {
                     var (ch2, attr2) = lineCells[col];
                     if (ch2 == '\0') ch2 = ' ';
                     if (attr2.Fg != fg || attr2.Bg != bg || attr2.Inverse != inverse || attr2.Bold != bold) break;
-                    sb.Append(ch2);
-                    col++;
+                    sb.Append(ch2); col++;
                 }
                 var run = sb.ToString().TrimEnd();
                 if (run.Length > 0)
                 {
                     var fgBrush = GetForegroundBrush(fg, bold, inverse, bg);
                     var bgBrush = GetBackgroundBrush(bg, inverse, bold, fg);
-                    if (bg >= 0 || inverse)
-                    {
-                        dc.DrawRectangle(bgBrush, null, new Rect(x, y, run.Length * _charWidth, _charHeight));
-                    }
+                    if (bg >= 0 || inverse) dc.DrawRectangle(bgBrush, null, new Rect(x, y, run.Length * _charWidth, _charHeight));
                     dc.DrawText(CreateText(run, fgBrush), new Point(x, y));
                 }
                 x += (col - start) * _charWidth;
             }
-
-            // Selection highlight
-            if (HasSelection && bufferRow.HasValue)
-            {
-                HighlightSelection(dc, bufferRow.Value, y, padX);
-            }
+            if (HasSelection && bufferRow.HasValue) HighlightSelection(dc, bufferRow.Value, y, padX);
             y += _charHeight;
         }
 
-        // Cursor (only when not scrolled back)
         if (_scrollOffset == 0 && _cursorVisible)
         {
             var cursor = _buffer.GetCursor();
-            DrawCursor(dc, cursor.x, cursor.y, padX, padY);
+            DrawCursor(dc, Math.Min(cursor.x, maxCols - 1), cursor.y, padX, padY);
         }
     }
 
@@ -357,11 +306,7 @@ public class TerminalControl : FrameworkElement
         if (!_selectionAnchor.HasValue || !_selectionEnd.HasValue) return;
         var (ax, ay) = ((int)_selectionAnchor.Value.X, (int)_selectionAnchor.Value.Y);
         var (bx, by) = ((int)_selectionEnd.Value.X, (int)_selectionEnd.Value.Y);
-        if (ay > by || (ay == by && ax > bx))
-        {
-            (ax, bx) = (bx, ax);
-            (ay, by) = (by, ay);
-        }
+        if (ay > by || (ay == by && ax > bx)) { (ax, bx) = (bx, ax); (ay, by) = (by, ay); }
         if (row < ay || row > by) return;
         int startX = row == ay ? ax : 0;
         int endX = row == by ? bx : (_buffer?.Columns ?? 0) - 1;
@@ -379,33 +324,18 @@ public class TerminalControl : FrameworkElement
         Brush brush = Brushes.LightGray;
         switch (_cursorStyle)
         {
-            case "block":
-                dc.DrawRectangle(new SolidColorBrush(Color.FromArgb(160, 200, 200, 200)), null, new Rect(x, y, _charWidth, _charHeight));
-                break;
-            case "pipe":
-                dc.DrawRectangle(brush, null, new Rect(x, y, Math.Max(1, _charWidth * 0.18), _charHeight));
-                break;
-            case "hash":
-                dc.DrawRectangle(Brushes.Transparent, null, new Rect(x, y, _charWidth, _charHeight));
-                dc.DrawLine(new Pen(brush, 1), new Point(x, y + _charHeight / 2), new Point(x + _charWidth, y + _charHeight / 2));
-                dc.DrawLine(new Pen(brush, 1), new Point(x + _charWidth / 2, y), new Point(x + _charWidth / 2, y + _charHeight));
-                break;
-            case "dot":
-                dc.DrawEllipse(brush, null, new Point(x + _charWidth / 2, y + _charHeight - 3), 2, 2);
-                break;
-            case "plus":
-                dc.DrawLine(new Pen(brush, 1), new Point(x + _charWidth / 2, y + 2), new Point(x + _charWidth / 2, y + _charHeight - 2));
-                dc.DrawLine(new Pen(brush, 1), new Point(x + 2, y + _charHeight / 2), new Point(x + _charWidth - 2, y + _charHeight / 2));
-                break;
-            default: // underscore
-                dc.DrawRectangle(brush, null, new Rect(x, y + _charHeight - 2, Math.Max(2, _charWidth * 0.7), 2));
-                break;
+            case "block": dc.DrawRectangle(new SolidColorBrush(Color.FromArgb(160, 200, 200, 200)), null, new Rect(x, y, _charWidth, _charHeight)); break;
+            case "pipe": dc.DrawRectangle(brush, null, new Rect(x, y, Math.Max(1, _charWidth * 0.18), _charHeight)); break;
+            case "hash": dc.DrawLine(new Pen(brush, 1), new Point(x, y + _charHeight / 2), new Point(x + _charWidth, y + _charHeight / 2)); dc.DrawLine(new Pen(brush, 1), new Point(x + _charWidth / 2, y), new Point(x + _charWidth / 2, y + _charHeight)); break;
+            case "dot": dc.DrawEllipse(brush, null, new Point(x + _charWidth / 2, y + _charHeight - 3), 2, 2); break;
+            case "plus": dc.DrawLine(new Pen(brush, 1), new Point(x + _charWidth / 2, y + 2), new Point(x + _charWidth / 2, y + _charHeight - 2)); dc.DrawLine(new Pen(brush, 1), new Point(x + 2, y + _charHeight / 2), new Point(x + _charWidth - 2, y + _charHeight / 2)); break;
+            default: dc.DrawRectangle(brush, null, new Rect(x, y + _charHeight - 2, Math.Max(2, _charWidth * 0.7), 2)); break; // underscore
         }
     }
 
     private int NormalizeColor(int c) => (c < 0 || c >= 16) ? 7 : c;
     private static readonly SolidColorBrush[] Palette = BuildPalette();
-    private static SolidColorBrush TransparentBlack = new SolidColorBrush(Color.FromRgb(0,0,0));
+    private static SolidColorBrush TransparentBlack = new(Color.FromRgb(0, 0, 0));
     private static SolidColorBrush[] BuildPalette()
     {
         var list = new List<SolidColorBrush>();
@@ -419,16 +349,13 @@ public class TerminalControl : FrameworkElement
         foreach (var c in colors) { var b = new SolidColorBrush(c); b.Freeze(); list.Add(b); }
         return list.ToArray();
     }
+
     private Brush GetForegroundBrush(int fg, bool bold, bool inverse, int bg)
     {
         if (inverse)
         {
-            // When inverse, background becomes foreground – if bg not set use default light gray
-            if (bg >= 0)
-            {
-                return Palette[NormalizeColor(bg + (bold && bg < 8 ? 8 : 0)) % Palette.Length];
-            }
-            return Brushes.Gainsboro; // fallback
+            if (bg >= 0) return Palette[NormalizeColor(bg + (bold && bg < 8 ? 8 : 0)) % Palette.Length];
+            return Brushes.Gainsboro;
         }
         int idx = fg < 0 ? 7 : NormalizeColor(fg + (bold && fg < 8 ? 8 : 0));
         return Palette[idx % Palette.Length];
@@ -438,31 +365,21 @@ public class TerminalControl : FrameworkElement
     {
         if (inverse)
         {
-            // Foreground becomes background; if fg unset use black
-            if (fg >= 0)
-            {
-                return Palette[NormalizeColor(fg + (bold && fg < 8 ? 8 : 0)) % Palette.Length];
-            }
+            if (fg >= 0) return Palette[NormalizeColor(fg + (bold && fg < 8 ? 8 : 0)) % Palette.Length];
             return TransparentBlack;
         }
-        if (bg < 0)
-        {
-            return TransparentBlack; // treat -1 as black (no rectangle drawn unless inverse handled separately)
-        }
+        if (bg < 0) return TransparentBlack;
         return Palette[NormalizeColor(bg) % Palette.Length];
     }
     #endregion
 
-    #region Input Handling
+    #region Input & Scrolling
     protected override void OnPreviewTextInput(TextCompositionEventArgs e)
     {
         base.OnPreviewTextInput(e);
         if (_script != null && _scrollOffset == 0)
         {
-            foreach (var c in e.Text)
-            {
-                _script.EnqueueImmediate(c);
-            }
+            foreach (var c in e.Text) _script.EnqueueImmediate(c);
         }
         e.Handled = true;
     }
@@ -470,21 +387,9 @@ public class TerminalControl : FrameworkElement
     protected override void OnPreviewKeyDown(KeyEventArgs e)
     {
         base.OnPreviewKeyDown(e);
-        if (e.Key == Key.PageUp)
-        {
-            _scrollOffset = Math.Min(_scrollOffset + 5, _scrollbackCache.Count);
-            InvalidateVisual();
-            e.Handled = true;
-            return;
-        }
-        if (e.Key == Key.PageDown)
-        {
-            _scrollOffset = Math.Max(0, _scrollOffset - 5);
-            InvalidateVisual();
-            e.Handled = true;
-            return;
-        }
-        if (_script == null || _scrollOffset != 0) return; // do not send keys while scrolled back
+        if (e.Key == Key.PageUp) { AdjustScroll(5); e.Handled = true; return; }
+        if (e.Key == Key.PageDown) { AdjustScroll(-5); e.Handled = true; return; }
+        if (_script == null || _scrollOffset != 0) return;
         switch (e.Key)
         {
             case Key.Enter: _script.EnqueueImmediate('\r'); e.Handled = true; break;
@@ -495,11 +400,43 @@ public class TerminalControl : FrameworkElement
             case Key.Right: SendEscape("[C"); e.Handled = true; break;
             case Key.Up: SendEscape("[A"); e.Handled = true; break;
             case Key.Down: SendEscape("[B"); e.Handled = true; break;
-            case Key.C when (Keyboard.Modifiers & ModifierKeys.Control) == ModifierKeys.Control:
-                CopySelectionToClipboard(); e.Handled = true; break;
-            case Key.V when (Keyboard.Modifiers & ModifierKeys.Control) == ModifierKeys.Control:
-                PasteFromClipboard(); e.Handled = true; break;
+            case Key.C when (Keyboard.Modifiers & ModifierKeys.Control) == ModifierKeys.Control: CopySelectionToClipboard(); e.Handled = true; break;
+            case Key.V when (Keyboard.Modifiers & ModifierKeys.Control) == ModifierKeys.Control: PasteFromClipboard(); e.Handled = true; break;
         }
+    }
+
+    protected override void OnMouseWheel(MouseWheelEventArgs e)
+    {
+        base.OnMouseWheel(e);
+        if (_buffer == null) return;
+        // Convert delta (120 units per notch) to lines; accumulate velocity
+        double lines = (e.Delta / 120.0) * 3.0; // 3 lines per notch
+        _scrollVelocity += lines;
+        if (!_inertiaActive)
+        {
+            _inertiaActive = true;
+            CompositionTarget.Rendering += OnInertiaFrame;
+        }
+        e.Handled = true;
+    }
+
+    private void OnInertiaFrame(object? sender, EventArgs e)
+    {
+        if (Math.Abs(_scrollVelocity) < 0.05)
+        {
+            _scrollVelocity = 0; _inertiaActive = false; CompositionTarget.Rendering -= OnInertiaFrame; return;
+        }
+        AdjustScroll((int)Math.Round(_scrollVelocity));
+        _scrollVelocity *= 0.90; // friction
+    }
+
+    private void AdjustScroll(int delta)
+    {
+        if (delta == 0) return;
+        int max = _scrollbackCache.Count;
+        _scrollOffset = Math.Clamp(_scrollOffset + delta, 0, max);
+        UpdateScrollBar();
+        InvalidateVisual();
     }
 
     private void SendEscape(string seq)
@@ -515,45 +452,13 @@ public class TerminalControl : FrameworkElement
 
     protected override void OnMouseLeftButtonDown(MouseButtonEventArgs e)
     {
-        base.OnMouseLeftButtonDown(e);
-        Focus();
-        var pos = e.GetPosition(this);
-        _selectionAnchor = _selectionEnd = ScreenFromPoint(pos);
-        _isSelecting = true;
-        CaptureMouse();
-        InvalidateVisual();
-    }
-
+        base.OnMouseLeftButtonDown(e); Focus(); var pos = e.GetPosition(this); _selectionAnchor = _selectionEnd = ScreenFromPoint(pos); _isSelecting = true; CaptureMouse(); InvalidateVisual(); }
     protected override void OnMouseMove(MouseEventArgs e)
-    {
-        base.OnMouseMove(e);
-        if (_isSelecting)
-        {
-            var pos = e.GetPosition(this);
-            _selectionEnd = ScreenFromPoint(pos);
-            InvalidateVisual();
-        }
-    }
-
+    { base.OnMouseMove(e); if (_isSelecting) { var pos = e.GetPosition(this); _selectionEnd = ScreenFromPoint(pos); InvalidateVisual(); } }
     protected override void OnMouseLeftButtonUp(MouseButtonEventArgs e)
-    {
-        base.OnMouseLeftButtonUp(e);
-        if (_isSelecting)
-        {
-            _isSelecting = false;
-            ReleaseMouseCapture();
-            InvalidateVisual();
-        }
-    }
-
+    { base.OnMouseLeftButtonUp(e); if (_isSelecting) { _isSelecting = false; ReleaseMouseCapture(); InvalidateVisual(); } }
     protected override void OnMouseRightButtonUp(MouseButtonEventArgs e)
-    {
-        base.OnMouseRightButtonUp(e);
-        if (HasSelection)
-        {
-            CopySelectionToClipboard();
-        }
-    }
+    { base.OnMouseRightButtonUp(e); if (HasSelection) CopySelectionToClipboard(); }
 
     private Point ScreenFromPoint(Point p)
     {
@@ -576,10 +481,7 @@ public class TerminalControl : FrameworkElement
         var sb = new StringBuilder();
         for (int y = ay; y <= by; y++)
         {
-            for (int x = (y == ay ? ax : 0); x <= (y == by ? bx : (_buffer.Columns - 1)); x++)
-            {
-                sb.Append(_buffer.GetChar(x, y));
-            }
+            for (int x = (y == ay ? ax : 0); x <= (y == by ? bx : (_buffer.Columns - 1)); x++) sb.Append(_buffer.GetChar(x, y));
             if (y < by) sb.Append('\n');
         }
         Clipboard.SetText(sb.ToString());
@@ -587,70 +489,54 @@ public class TerminalControl : FrameworkElement
 
     private void PasteFromClipboard()
     {
-        if (_script == null || _scrollOffset != 0) return;
-        if (!Clipboard.ContainsText()) return;
-        var text = Clipboard.GetText();
-        if (string.IsNullOrEmpty(text)) return;
-        // Normalize line endings to CR
-        text = text.Replace("\r\n", "\n").Replace('\r', '\n');
-        foreach (var ch in text)
-        {
-            if (ch == '\n')
-            {
-                _script.EnqueueImmediate('\r');
-            }
-            else if (!char.IsControl(ch) || ch == '\t')
-            {
-                _script.EnqueueImmediate(ch);
-            }
-        }
-    }
+        if (_script == null || _scrollOffset != 0) return; if (!Clipboard.ContainsText()) return; var text = Clipboard.GetText(); if (string.IsNullOrEmpty(text)) return; text = text.Replace("\r\n", "\n").Replace('\r', '\n'); foreach (var ch in text) { if (ch == '\n') _script.EnqueueImmediate('\r'); else if (!char.IsControl(ch) || ch == '\t') _script.EnqueueImmediate(ch); } }
     #endregion
 
-    #region Resize
+    #region Resize / Geometry
     private void UpdateTerminalGeometry()
     {
-        if (_buffer == null) return;
-        if (_charWidth <= 0 || _charHeight <= 0) return;
-        int cols = Math.Max(10, (int)((ActualWidth - 4) / _charWidth));
-        int rows = Math.Max(5, (int)((ActualHeight - 4) / _charHeight));
-        if (cols != _buffer.Columns || rows != _buffer.Rows)
-        {
-            _buffer.Resize(cols, rows);
-            SendNaws(cols, rows);
-        }
-        else
-        {
-            // Even if size is same, user might expect renegotiation (F5 equivalent) when font size changes drastically
-            // Allow manual trigger by setting TerminalFontSize again or provide public method ForceResizeNegotiation.
-        }
+        if (_buffer == null) return; if (_charWidth <= 0 || _charHeight <= 0) return; int cols = Math.Max(10, (int)((ActualWidth - 4 - ((_vScroll != null && _vScroll.Visibility == Visibility.Visible) ? _vScroll.ActualWidth : 0)) / _charWidth)); int rows = Math.Max(5, (int)((ActualHeight - 4) / _charHeight)); if (cols != _buffer.Columns || rows != _buffer.Rows) { _buffer.Resize(cols, rows); SendNaws(cols, rows); }
     }
 
     private void SendNaws(int cols, int rows)
+    { if (_telnet == null) return; var now = DateTime.UtcNow; if (now - _lastNaws < NawsThrottle) return; _lastNaws = now; _telnet.NotifyResize(cols, rows); }
+
+    public void ForceResizeNegotiation() { if (_buffer == null) return; SendNaws(_buffer.Columns, _buffer.Rows); }
+
+    protected override void OnRenderSizeChanged(SizeChangedInfo sizeInfo) { base.OnRenderSizeChanged(sizeInfo); UpdateTerminalGeometry(); }
+    #endregion
+
+    #region Snapshot Processing
+    private void ProcessPendingLines()
     {
-        if (_telnet == null) return;
-        var now = DateTime.UtcNow;
-        if (now - _lastNaws < NawsThrottle)
+        _renderScheduled = false;
+        if (_buffer == null) return;
+        _snapshot = _buffer.Snapshot();
+        _scrollbackCache = _buffer.GetScrollback().Select(l => l.ToArray()).ToList();
+        if (_scrollOffset > _scrollbackCache.Count) _scrollOffset = _scrollbackCache.Count;
+        UpdateScrollBar();
+        InvalidateVisual();
+    }
+    #endregion
+
+    #region ScrollBar Sync
+    private bool _suppressScrollEvent;
+    private void UpdateScrollBar()
+    {
+        if (_vScroll == null) return;
+        int max = _scrollbackCache.Count;
+        if (max == 0)
         {
+            _vScroll.Visibility = Visibility.Collapsed;
             return;
         }
-        _lastNaws = now;
-        _telnet.NotifyResize(cols, rows);
-    }
-
-    /// <summary>
-    /// Public method to force NAWS negotiation (acts like legacy F5 refresh).
-    /// </summary>
-    public void ForceResizeNegotiation()
-    {
-        if (_buffer == null) return;
-        SendNaws(_buffer.Columns, _buffer.Rows);
-    }
-
-    protected override void OnRenderSizeChanged(SizeChangedInfo sizeInfo)
-    {
-        base.OnRenderSizeChanged(sizeInfo);
-        UpdateTerminalGeometry();
+        _vScroll.Visibility = Visibility.Visible;
+        _suppressScrollEvent = true;
+        _vScroll.Maximum = max;
+        _vScroll.LargeChange = Math.Max(1, _buffer?.Rows ?? 10);
+        _vScroll.SmallChange = 1;
+        _vScroll.Value = _scrollOffset;
+        _suppressScrollEvent = false;
     }
     #endregion
 }

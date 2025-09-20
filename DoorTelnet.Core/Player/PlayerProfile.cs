@@ -8,6 +8,35 @@ public class PlayerProfile
     public List<SpellInfo> Spells { get; set; } = new();
     public StatusEffects Effects { get; set; } = new();
 
+    public event Action? Updated;
+    private void RaiseUpdated() => Updated?.Invoke();
+
+    public void AddOrUpdateSpell(SpellInfo info)
+    {
+        var existing = Spells.FirstOrDefault(s => s.Nick.Equals(info.Nick, StringComparison.OrdinalIgnoreCase));
+        if (existing == null) { Spells.Add(info); RaiseUpdated(); }
+    }
+    public void AddInventoryItem(string item)
+    {
+        if (!Player.Inventory.Contains(item, StringComparer.OrdinalIgnoreCase)) { Player.Inventory.Add(item); RaiseUpdated(); }
+    }
+    public void AddHeal(HealSpell heal)
+    {
+        if (!Player.Heals.Any(h => h.Short.Equals(heal.Short, StringComparison.OrdinalIgnoreCase))) { Player.Heals.Add(heal); RaiseUpdated(); }
+    }
+    public void AddShield(string shield)
+    {
+        if (!Player.Shields.Contains(shield, StringComparer.OrdinalIgnoreCase)) { Player.Shields.Add(shield); RaiseUpdated(); }
+    }
+    public void SetNameClass(string name, string @class)
+    {
+        bool ch = false;
+        if (!string.IsNullOrWhiteSpace(name) && name != Player.Name) { Player.Name = name; ch = true; }
+        if (!string.IsNullOrWhiteSpace(@class) && @class != Player.Class) { Player.Class = @class; ch = true; }
+        if (ch) RaiseUpdated();
+    }
+    public void SetShielded(bool value) { if (Effects.Shielded != value) { Effects.Shielded = value; RaiseUpdated(); } }
+
     /// <summary>
     /// Reset the player profile to default state
     /// </summary>
@@ -18,6 +47,7 @@ public class PlayerProfile
         Features = new FeatureFlags();
         Spells = new List<SpellInfo>();
         Effects = new StatusEffects();
+        RaiseUpdated();
     }
 }
 

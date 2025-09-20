@@ -12,11 +12,10 @@ public partial class CredentialsViewModel : ViewModelBase
 
     public ObservableCollection<string> Users { get; } = new();
 
-    // Backing fields for observable properties
     private string _selectedUser = string.Empty; public string SelectedUser { get => _selectedUser; set { if (SetProperty(ref _selectedUser, value)) OnSelectedUserChanged(); } }
-    private string _username = string.Empty; public string Username { get => _username; set { if (SetProperty(ref _username, value)) SaveCommand.NotifyCanExecuteChanged(); } }
-    private string _password = string.Empty; public string Password { get => _password; set { if (SetProperty(ref _password, value)) SaveCommand.NotifyCanExecuteChanged(); } }
-    private bool _isNew = true; public bool IsNew { get => _isNew; set { if (SetProperty(ref _isNew, value)) SaveCommand.NotifyCanExecuteChanged(); } }
+    private string _username = string.Empty; public string Username { get => _username; set { if (SetProperty(ref _username, value)) { SaveCommand.NotifyCanExecuteChanged(); } } }
+    private string _password = string.Empty; public string Password { get => _password; set { if (SetProperty(ref _password, value)) { SaveCommand.NotifyCanExecuteChanged(); } } }
+    private bool _isNew = true; public bool IsNew { get => _isNew; set { if (SetProperty(ref _isNew, value)) { SaveCommand.NotifyCanExecuteChanged(); DeleteCommand.NotifyCanExecuteChanged(); if (value) { Password = string.Empty; } } } }
 
     public IRelayCommand SaveCommand { get; }
     public IRelayCommand DeleteCommand { get; }
@@ -31,6 +30,11 @@ public partial class CredentialsViewModel : ViewModelBase
         DeleteCommand = new RelayCommand(Delete, CanDelete);
         CloseCommand = new RelayCommand(() => RequestClose?.Invoke());
         Load();
+        // Start in new mode if no users
+        if (Users.Count == 0)
+        {
+            IsNew = true;
+        }
     }
 
     private void OnSelectedUserChanged()
@@ -39,7 +43,7 @@ public partial class CredentialsViewModel : ViewModelBase
         {
             IsNew = false;
             Username = SelectedUser;
-            Password = _store.GetPassword(SelectedUser) ?? string.Empty;
+            Password = string.Empty; // do not expose existing password; require re-entry to change
         }
         DeleteCommand.NotifyCanExecuteChanged();
         SaveCommand.NotifyCanExecuteChanged();
@@ -49,16 +53,35 @@ public partial class CredentialsViewModel : ViewModelBase
     {
         Users.Clear();
         foreach (var u in _store.ListUsernames()) Users.Add(u);
-        if (Users.Count > 0) SelectedUser = Users[0];
+        if (Users.Count > 0)
+        {
+            SelectedUser = Users[0];
+        }
     }
 
-    private bool CanSave() => !string.IsNullOrWhiteSpace(Username) && !string.IsNullOrWhiteSpace(Password);
-    private bool CanDelete() => !string.IsNullOrEmpty(SelectedUser);
+    // Allow saving:
+    // New credential: username + password required
+    // Existing credential update: username required; password optional (only update if provided)
+    private bool CanSave()
+    {
+        if (IsNew)
+            return !string.IsNullOrWhiteSpace(Username) && !string.IsNullOrWhiteSpace(Password);
+        return !string.IsNullOrWhiteSpace(Username); // editing existing
+    }
+
+    private bool CanDelete() => !IsNew && !string.IsNullOrEmpty(SelectedUser);
 
     private void Save()
     {
         if (!CanSave()) return;
-        _store.AddOrUpdate(Username, Password);
+        // If editing existing and password left blank, keep old stored password
+        string passwordToStore = Password;
+        if (!IsNew && string.IsNullOrWhiteSpace(passwordToStore))
+        {
+            var existing = _store.GetPassword(SelectedUser);
+            passwordToStore = existing ?? string.Empty;
+        }
+        _store.AddOrUpdate(Username, passwordToStore);
         Load();
         SelectedUser = Username;
         IsNew = false;
@@ -66,8 +89,14 @@ public partial class CredentialsViewModel : ViewModelBase
 
     private void Delete()
     {
-        if (string.IsNullOrEmpty(SelectedUser)) return;
+        if (IsNew || string.IsNullOrEmpty(SelectedUser)) return;
         _store.Remove(SelectedUser);
         Load();
+        IsNew = Users.Count == 0; // switch to new mode if nothing left
+        if (IsNew)
+        {
+            Username = string.Empty;
+            Password = string.Empty;
+        }
     }
 }

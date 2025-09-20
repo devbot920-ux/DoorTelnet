@@ -265,4 +265,78 @@
         <Setter Property="Padding" Value="2"/>
         <Setter Property="BorderThickness" Value="1"/>
     </Style>
+
+    <!-- Dark DataGrid Style -->
+    <Style TargetType="DataGrid" x:Key="DarkDataGridStyle">
+        <Setter Property="Background" Value="{StaticResource Brush.Panel}"/>
+        <Setter Property="Foreground" Value="{StaticResource Brush.Text}"/>
+        <Setter Property="BorderBrush" Value="{StaticResource Brush.Border}"/>
+        <Setter Property="HorizontalGridLinesBrush" Value="#333"/>
+        <Setter Property="VerticalGridLinesBrush" Value="#333"/>
+        <Setter Property="RowBackground" Value="#262626"/>
+        <Setter Property="AlternatingRowBackground" Value="#2C2C2C"/>
+        <Setter Property="CanUserAddRows" Value="False"/>
+        <Setter Property="CanUserDeleteRows" Value="False"/>
+        <Setter Property="AutoGenerateColumns" Value="False"/>
+        <Setter Property="SelectionMode" Value="Single"/>
+        <Setter Property="SelectionUnit" Value="FullRow"/>
+    </Style>
+
+    <Style TargetType="DataGrid" BasedOn="{StaticResource DarkDataGridStyle}" />
+
+    <!-- Dark DataGridRow hover/selected -->
+    <Style TargetType="DataGridRow">
+        <Setter Property="Background" Value="#262626"/>
+        <Setter Property="Foreground" Value="{StaticResource Brush.Text}"/>
+        <Setter Property="BorderBrush" Value="{StaticResource Brush.Border}"/>
+        <Setter Property="BorderThickness" Value="0,0,0,1"/>
+        <Style.Triggers>
+            <Trigger Property="IsMouseOver" Value="True">
+                <Setter Property="Background" Value="#303840"/>
+            </Trigger>
+            <Trigger Property="IsSelected" Value="True">
+                <Setter Property="Background" Value="{StaticResource Brush.Accent}"/>
+                <Setter Property="Foreground" Value="White"/>
+            </Trigger>
+        </Style.Triggers>
+    </Style>
+
+    <!-- Dark TabControl -->
+    <Style TargetType="TabControl">
+        <Setter Property="Background" Value="{StaticResource Brush.Panel}"/>
+        <Setter Property="Foreground" Value="{StaticResource Brush.Text}"/>
+        <Setter Property="BorderBrush" Value="{StaticResource Brush.Border}"/>
+    </Style>
+
+    <Style TargetType="TabItem">
+        <Setter Property="Foreground" Value="{StaticResource Brush.Text}"/>
+        <Setter Property="Background" Value="#262626"/>
+        <Setter Property="Padding" Value="10,4"/>
+        <Setter Property="Margin" Value="2,2,2,0"/>
+        <Setter Property="BorderBrush" Value="{StaticResource Brush.Border}"/>
+        <Setter Property="BorderThickness" Value="1"/>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="TabItem">
+                    <Grid>
+                        <Border x:Name="Bd" CornerRadius="4,4,0,0" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}" Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                    </Grid>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsSelected" Value="True">
+                            <Setter TargetName="Bd" Property="Background" Value="{StaticResource Brush.Accent}"/>
+                            <Setter Property="Foreground" Value="White"/>
+                        </Trigger>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="Bd" Property="Background" Value="#303840"/>
+                        </Trigger>
+                        <Trigger Property="IsEnabled" Value="False">
+                            <Setter Property="Opacity" Value="0.55"/>
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
 </ResourceDictionary>

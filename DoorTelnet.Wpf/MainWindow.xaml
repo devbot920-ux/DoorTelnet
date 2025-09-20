@@ -13,6 +13,24 @@
         <Border DockPanel.Dock="Top" Background="{StaticResource Brush.Panel}" BorderBrush="{StaticResource Brush.Border}" BorderThickness="0,0,0,1" Padding="2" SnapsToDevicePixels="True">
             <DockPanel LastChildFill="True">
                 <StackPanel Orientation="Horizontal" DockPanel.Dock="Right" VerticalAlignment="Center" Margin="4,0,0,0">
+                    <ToggleButton Width="130" Margin="0,0,8,0" IsChecked="{Binding AutoGong, Mode=TwoWay}" Content="{Binding AutoGongButtonText}" Command="{Binding ToggleAutoGongCommand}">
+                        <ToggleButton.Style>
+                            <Style TargetType="ToggleButton">
+                                <Setter Property="Foreground" Value="{StaticResource Brush.Text}"/>
+                                <Setter Property="Background" Value="{StaticResource Brush.Panel}"/>
+                                <Setter Property="BorderBrush" Value="{StaticResource Brush.Border}"/>
+                                <Setter Property="BorderThickness" Value="1"/>
+                                <Setter Property="Padding" Value="6,3"/>
+                                <Setter Property="Cursor" Value="Hand"/>
+                                <Style.Triggers>
+                                    <Trigger Property="IsChecked" Value="True">
+                                        <Setter Property="Background" Value="{StaticResource Brush.Accent}"/>
+                                        <Setter Property="BorderBrush" Value="{StaticResource Brush.AccentLight}"/>
+                                    </Trigger>
+                                </Style.Triggers>
+                            </Style>
+                        </ToggleButton.Style>
+                    </ToggleButton>
                     <Button Width="110" Content="{Binding ConnectButtonText}" Command="{Binding ToggleConnectionCommand}" />
                 </StackPanel>
                 <Menu Background="{StaticResource Brush.Panel}" BorderThickness="0" ItemContainerStyle="{StaticResource DarkMenuItemStyle}">
@@ -24,9 +42,15 @@
                     <MenuItem Header="_Profiles">
                         <MenuItem Header="Credentials" Command="{Binding ShowCredentialsCommand}" />
                         <MenuItem Header="Characters" Command="{Binding ShowCharactersCommand}" />
+                        <MenuItem Header="Character Sheet" Command="{Binding ShowCharacterSheetCommand}" />
                     </MenuItem>
                     <MenuItem Header="_Automation">
                         <MenuItem Header="Refresh Stats" Command="{Binding Combat.RefreshStatsCommand}" />
+                        <Separator />
+                        <MenuItem Header="Send Username" Command="{Binding SendUsernameCommand}" />
+                        <MenuItem Header="Send Password" Command="{Binding SendPasswordCommand}" />
+                        <MenuItem Header="Quick Login" Command="{Binding QuickLoginCommand}" />
+                        <MenuItem Header="Send Initial Data" Command="{Binding SendInitialDataCommand}" />
                     </MenuItem>
                     <MenuItem Header="_Help">
                         <MenuItem Header="About" />

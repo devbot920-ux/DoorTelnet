@@ -11,4 +11,12 @@ public partial class CredentialsDialog : Window
         DataContext = vm;
         vm.RequestClose += () => Dispatcher.Invoke(Close);
     }
+
+    private void PwdBox_PasswordChanged(object sender, RoutedEventArgs e)
+    {
+        if (DataContext is CredentialsViewModel vm && sender is System.Windows.Controls.PasswordBox pb)
+        {
+            vm.Password = pb.Password;
+        }
+    }
 }
