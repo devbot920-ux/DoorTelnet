@@ -9,11 +9,30 @@
         Title="DoorTelnet" Height="650" Width="1150" MinWidth="900" MinHeight="550"
         Background="{StaticResource Brush.Background}">
     <DockPanel>
-        <!-- Top bar (replaces ToolBar to remove grip & overflow) -->
-        <Border DockPanel.Dock="Top" Background="{StaticResource Brush.Panel}" BorderBrush="{StaticResource Brush.Border}" BorderThickness="0,0,0,1" Padding="6,4" SnapsToDevicePixels="True">
-            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                <Button Width="105" Content="{Binding ConnectButtonText}" Command="{Binding ToggleConnectionCommand}" />
-            </StackPanel>
+        <!-- Top bar with menu and connect button -->
+        <Border DockPanel.Dock="Top" Background="{StaticResource Brush.Panel}" BorderBrush="{StaticResource Brush.Border}" BorderThickness="0,0,0,1" Padding="2" SnapsToDevicePixels="True">
+            <DockPanel LastChildFill="True">
+                <StackPanel Orientation="Horizontal" DockPanel.Dock="Right" VerticalAlignment="Center" Margin="4,0,0,0">
+                    <Button Width="110" Content="{Binding ConnectButtonText}" Command="{Binding ToggleConnectionCommand}" />
+                </StackPanel>
+                <Menu Background="{StaticResource Brush.Panel}" BorderThickness="0" ItemContainerStyle="{StaticResource DarkMenuItemStyle}">
+                    <MenuItem Header="_File">
+                        <MenuItem Header="Settings" Command="{Binding ShowSettingsCommand}" />
+                        <Separator />
+                        <MenuItem Header="Exit" Command="{Binding ToggleConnectionCommand}" />
+                    </MenuItem>
+                    <MenuItem Header="_Profiles">
+                        <MenuItem Header="Credentials" Command="{Binding ShowCredentialsCommand}" />
+                        <MenuItem Header="Characters" Command="{Binding ShowCharactersCommand}" />
+                    </MenuItem>
+                    <MenuItem Header="_Automation">
+                        <MenuItem Header="Refresh Stats" Command="{Binding Combat.RefreshStatsCommand}" />
+                    </MenuItem>
+                    <MenuItem Header="_Help">
+                        <MenuItem Header="About" />
+                    </MenuItem>
+                </Menu>
+            </DockPanel>
         </Border>
 
         <!-- Status bar bottom -->

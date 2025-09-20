@@ -13,14 +13,13 @@ using DoorTelnet.Core.Telnet;
 using DoorTelnet.Core.World;
 using DoorTelnet.Core.Combat;
 using DoorTelnet.Core.Player;
-using System.Reflection;
 using DoorTelnet.Wpf.Services;
 
 namespace DoorTelnet.Wpf;
 
 public partial class App : Application
 {
-    private IHost? _host;
+    internal IHost? _host; // expose for dialog resolution
 
     protected override void OnStartup(StartupEventArgs e)
     {
@@ -45,6 +44,7 @@ public partial class App : Application
                 var config = ctx.Configuration;
                 services.AddSingleton<IConfiguration>(config);
 
+                // Core singletons
                 services.AddSingleton<ScreenBuffer>(_ => new ScreenBuffer(
                     int.TryParse(config["terminal:cols"], out var c) ? c : 80,
                     int.TryParse(config["terminal:rows"], out var r) ? r : 25));
@@ -55,6 +55,8 @@ public partial class App : Application
                 services.AddSingleton<CombatTracker>();
                 services.AddSingleton<PlayerProfile>();
                 services.AddSingleton<ISettingsService, SettingsService>();
+                services.AddSingleton(sp => new CredentialStore(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "DoorTelnet", "credentials.json")));
+                services.AddSingleton(sp => new CharacterProfileStore(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "DoorTelnet", "characters.json")));
 
                 services.AddSingleton<TelnetClient>(sp =>
                 {
@@ -72,7 +74,7 @@ public partial class App : Application
                     var combatTracker = sp.GetRequiredService<CombatTracker>();
                     var roomVm = sp.GetRequiredService<RoomViewModel>();
                     roomTracker.RoomChanged += _ => Current?.Dispatcher.BeginInvoke(roomVm.Refresh);
-                    var screenField = typeof(ScriptEngine).GetField("_screen", BindingFlags.NonPublic | BindingFlags.Instance);
+                    var screenField = typeof(ScriptEngine).GetField("_screen", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
 
                     var client = new TelnetClient(cols, rows, script, rules, logger, diagnostics, raw, dumb, stats);
 
@@ -139,16 +141,19 @@ public partial class App : Application
                     return client;
                 });
 
+                // ViewModels / dialogs
+                services.AddTransient<SettingsViewModel>();
+                services.AddTransient<CredentialsViewModel>();
+                services.AddTransient<CharacterProfilesViewModel>();
+
                 services.AddSingleton<StatsViewModel>();
                 services.AddSingleton<RoomViewModel>();
                 services.AddSingleton<CombatViewModel>();
-                services.AddSingleton<SettingsViewModel>();
                 services.AddSingleton<MainViewModel>();
 
                 services.AddSingleton<MainWindow>(sp =>
                 {
                     var w = new MainWindow { DataContext = sp.GetRequiredService<MainViewModel>() };
-                    // Restore window size/pos
                     var settings = sp.GetRequiredService<ISettingsService>();
                     var ui = settings.Get().UI;
                     if (ui.Width > 400 && ui.Height > 300)
