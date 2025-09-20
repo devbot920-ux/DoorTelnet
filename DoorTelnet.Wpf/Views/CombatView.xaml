@@ -1,0 +1,60 @@
+<UserControl x:Class="DoorTelnet.Wpf.Views.CombatView" xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" MinWidth="260" MinHeight="220">
+  <Grid>
+    <Grid.RowDefinitions>
+      <RowDefinition Height="Auto"/>
+      <RowDefinition Height="Auto"/>
+      <RowDefinition Height="*"/>
+      <RowDefinition Height="Auto"/>
+    </Grid.RowDefinitions>
+    <StackPanel Orientation="Horizontal" Grid.Row="0" Margin="0 0 0 4" VerticalAlignment="Center">
+      <TextBlock Text="Combat" FontWeight="Bold" FontSize="14" />
+      <TextBlock Text="  ("/>
+      <TextBlock Text="{Binding ActiveCombats.Count}"/>
+      <TextBlock Text=" active)"/>
+      <Button Content="Clear" Command="{Binding ClearHistoryCommand}" Margin="12 0 0 0" Padding="6 2" />
+      <Button Content="Export" Command="{Binding ExportCsvCommand}" Margin="4 0 0 0" Padding="6 2" />
+    </StackPanel>
+    <Border Grid.Row="1" BorderBrush="#444" BorderThickness="0 0 0 1" Padding="0 0 0 4" Margin="0 0 0 4">
+      <UniformGrid Columns="5">
+        <TextBlock Text="Total:" Foreground="#999"/>
+        <TextBlock Text="{Binding TotalCombats}"/>
+        <TextBlock Text="XP:" Foreground="#999"/>
+        <TextBlock Text="{Binding TotalExperience}"/>
+        <TextBlock Text=""/>
+      </UniformGrid>
+    </Border>
+    <TabControl Grid.Row="2" Margin="0 0 0 6">
+      <TabItem Header="Active">
+        <DataGrid ItemsSource="{Binding ActiveCombats}" AutoGenerateColumns="False" HeadersVisibility="Column" CanUserAddRows="False" CanUserDeleteRows="False" IsReadOnly="True" RowHeaderWidth="0" FontSize="12">
+          <DataGrid.Columns>
+            <DataGridTextColumn Header="Monster" Binding="{Binding MonsterName}" Width="*"/>
+            <DataGridTextColumn Header="Dealt" Binding="{Binding DamageDealt}" Width="60"/>
+            <DataGridTextColumn Header="Taken" Binding="{Binding DamageTaken}" Width="60"/>
+            <DataGridTextColumn Header="Dur(s)" Binding="{Binding DurationSeconds, StringFormat=F1}" Width="60"/>
+            <DataGridTextColumn Header="DPS" Binding="{Binding DpsDealt, StringFormat=F1}" Width="60"/>
+          </DataGrid.Columns>
+        </DataGrid>
+      </TabItem>
+      <TabItem Header="History">
+        <DataGrid ItemsSource="{Binding CompletedCombats}" AutoGenerateColumns="False" HeadersVisibility="Column" CanUserAddRows="False" CanUserDeleteRows="False" IsReadOnly="True" RowHeaderWidth="0" FontSize="12">
+          <DataGrid.Columns>
+            <DataGridTextColumn Header="Monster" Binding="{Binding MonsterName}" Width="*"/>
+            <DataGridTextColumn Header="Dealt" Binding="{Binding DamageDealt}" Width="60"/>
+            <DataGridTextColumn Header="Taken" Binding="{Binding DamageTaken}" Width="60"/>
+            <DataGridTextColumn Header="XP" Binding="{Binding ExperienceGained}" Width="60"/>
+            <DataGridTextColumn Header="Dur(s)" Binding="{Binding DurationSeconds, StringFormat=F1}" Width="60"/>
+            <DataGridTextColumn Header="DPS" Binding="{Binding DpsDealt, StringFormat=F1}" Width="60"/>
+            <DataGridTextColumn Header="Status" Binding="{Binding Status}" Width="80"/>
+          </DataGrid.Columns>
+        </DataGrid>
+      </TabItem>
+    </TabControl>
+    <StackPanel Grid.Row="3" Orientation="Horizontal" HorizontalAlignment="Right" Opacity="0.7">
+      <TextBlock Text="Avg DPS:" FontSize="11"/>
+      <TextBlock Text=" "/>
+      <TextBlock Text="{Binding AvgDps, StringFormat=F1}" FontSize="11"/>
+      <TextBlock Text="  Win%:" FontSize="11" Margin="8 0 0 0"/>
+      <TextBlock Text="{Binding WinRate, StringFormat=F1}" FontSize="11"/>
+    </StackPanel>
+  </Grid>
+</UserControl>

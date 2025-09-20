@@ -6,6 +6,7 @@ using Microsoft.Extensions.Configuration;
 using DoorTelnet.Core.Telnet;
 using DoorTelnet.Core.Scripting;
 using DoorTelnet.Core.Automation;
+using DoorTelnet.Core.Combat;
 
 namespace DoorTelnet.Wpf.ViewModels;
 
@@ -14,16 +15,22 @@ public partial class MainViewModel : ViewModelBase
     private readonly TelnetClient _client;
     private readonly IConfiguration _config;
     private readonly StatsTracker _statsTracker;
+    private readonly CombatTracker _combatTracker;
 
     public StatsViewModel Stats { get; }
+    public RoomViewModel Room { get; } // Stage 4
+    public CombatViewModel Combat { get; } // Stage 5
 
-    public MainViewModel(TelnetClient client, IConfiguration config, ILogger<MainViewModel> logger, StatsTracker statsTracker, StatsViewModel statsViewModel)
+    public MainViewModel(TelnetClient client, IConfiguration config, ILogger<MainViewModel> logger, StatsTracker statsTracker, StatsViewModel statsViewModel, RoomViewModel roomViewModel, CombatViewModel combatViewModel, CombatTracker combatTracker)
         : base(logger)
     {
         _client = client;
         _config = config;
         _statsTracker = statsTracker;
+        _combatTracker = combatTracker;
         Stats = statsViewModel;
+        Room = roomViewModel; // Stage 4
+        Combat = combatViewModel; // Stage 5
         ConnectionStatus = "Disconnected";
         ConnectCommand = new AsyncRelayCommand(ConnectAsync, CanConnect);
         DisconnectCommand = new AsyncRelayCommand(DisconnectAsync, () => IsConnected);

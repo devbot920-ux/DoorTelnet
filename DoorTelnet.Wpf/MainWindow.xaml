@@ -67,7 +67,6 @@
                     <RowDefinition Height="Auto" />
                     <RowDefinition Height="Auto" />
                     <RowDefinition Height="Auto" />
-                    <RowDefinition Height="Auto" />
                     <RowDefinition Height="*" />
                 </Grid.RowDefinitions>
 
@@ -76,28 +75,14 @@
                 </Border>
 
                 <Border Style="{StaticResource PanelBorderStyle}" Margin="0,0,0,6" Grid.Row="1">
-                    <StackPanel>
-                        <TextBlock Text="Room" FontWeight="Bold" Margin="0,0,0,4" />
-                        <TextBlock Text="Room Placeholder" Foreground="{StaticResource Brush.TextMuted}" />
-                    </StackPanel>
+                    <views:RoomView DataContext="{Binding Room}" />
                 </Border>
 
                 <Border Style="{StaticResource PanelBorderStyle}" Margin="0,0,0,6" Grid.Row="2">
-                    <StackPanel>
-                        <TextBlock Text="Combat" FontWeight="Bold" Margin="0,0,0,4" />
-                        <TextBlock Text="Combat Placeholder" Foreground="{StaticResource Brush.TextMuted}" />
-                    </StackPanel>
+                    <views:CombatView DataContext="{Binding Combat}" />
                 </Border>
 
-                <Border Style="{StaticResource PanelBorderStyle}" Margin="0,0,0,6" Grid.Row="3">
-                    <StackPanel>
-                        <TextBlock Text="Automation" FontWeight="Bold" Margin="0,0,0,4" />
-                        <TextBlock Text="Future scripting / triggers UI" Foreground="{StaticResource Brush.TextMuted}" />
-                    </StackPanel>
-                </Border>
-
-                <!-- Log occupies remaining vertical space -->
-                <Border Style="{StaticResource PanelBorderStyle}" Grid.Row="4">
+                <Border Style="{StaticResource PanelBorderStyle}" Grid.Row="3">
                     <Grid>
                         <Grid.RowDefinitions>
                             <RowDefinition Height="Auto" />

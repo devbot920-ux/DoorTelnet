@@ -94,6 +94,28 @@ public class TelnetClient
         catch { }
     }
 
+    /// <summary>
+    /// Queue a full command (appends CRLF). Safe prior to connection; will flush when connected.
+    /// </summary>
+    public void SendCommand(string command)
+    {
+        if (string.IsNullOrWhiteSpace(command)) return;
+        var text = command.TrimEnd('\r', '\n') + "\r\n";
+        var bytes = Encoding.ASCII.GetBytes(text);
+        foreach (var b in bytes) _outQueue.Enqueue(b);
+    }
+
+    /// <summary>
+    /// Queue raw text (no CRLF automatically appended unless specified).
+    /// </summary>
+    public void SendRaw(string text, bool appendCrLf = false)
+    {
+        if (string.IsNullOrEmpty(text)) return;
+        if (appendCrLf) text += "\r\n";
+        var bytes = Encoding.ASCII.GetBytes(text);
+        foreach (var b in bytes) _outQueue.Enqueue(b);
+    }
+
     public async Task ConnectAsync(string host, int port, CancellationToken cancellationToken = default)
     {
         _tcp = new TcpClient

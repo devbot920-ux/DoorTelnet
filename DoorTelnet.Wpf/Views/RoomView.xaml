@@ -1,0 +1,46 @@
+<UserControl x:Class="DoorTelnet.Wpf.Views.RoomView" xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" MinWidth="260" MinHeight="240">
+    <StackPanel>
+        <TextBlock Text="Room" FontWeight="Bold" FontSize="14" />
+        <TextBlock Text="{Binding RoomName}" FontWeight="SemiBold" TextWrapping="Wrap" Margin="0 2 0 6" />
+
+        <TextBlock Text="Exits" FontWeight="Bold" />
+        <ItemsControl ItemsSource="{Binding Exits}" Margin="0 2 0 6">
+            <ItemsControl.ItemsPanel>
+                <ItemsPanelTemplate>
+                    <WrapPanel />
+                </ItemsPanelTemplate>
+            </ItemsControl.ItemsPanel>
+            <ItemsControl.ItemTemplate>
+                <DataTemplate>
+                    <Border Background="#2d2d2d" BorderBrush="#555" BorderThickness="1" CornerRadius="4" Padding="6,2" Margin="0 0 6 6">
+                        <TextBlock Text="{Binding}" FontSize="11" />
+                    </Border>
+                </DataTemplate>
+            </ItemsControl.ItemTemplate>
+        </ItemsControl>
+
+        <TextBlock Text="Monsters" FontWeight="Bold" />
+        <ItemsControl ItemsSource="{Binding Monsters}" Margin="0 2 0 8">
+            <ItemsControl.ItemTemplate>
+                <DataTemplate>
+                    <TextBlock Text="{Binding DisplayName}" />
+                </DataTemplate>
+            </ItemsControl.ItemTemplate>
+        </ItemsControl>
+
+        <TextBlock Text="Items" FontWeight="Bold" />
+        <ItemsControl ItemsSource="{Binding Items}" Margin="0 2 0 0">
+            <ItemsControl.ItemTemplate>
+                <DataTemplate>
+                    <TextBlock Text="{Binding}" />
+                </DataTemplate>
+            </ItemsControl.ItemTemplate>
+        </ItemsControl>
+
+        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0 8 0 0">
+            <TextBlock Text="Updated:" FontSize="10" Foreground="#888" />
+            <TextBlock Text=" " FontSize="10" />
+            <TextBlock Text="{Binding LastUpdated}" FontSize="10" Foreground="#888" />
+        </StackPanel>
+    </StackPanel>
+</UserControl>

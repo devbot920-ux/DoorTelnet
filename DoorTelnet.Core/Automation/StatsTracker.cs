@@ -55,8 +55,27 @@ public class StatsTracker
             if (int.TryParse(m.Groups["hp"].Value, out var hp)) { if (hp != Hp) { Hp = hp; changed = true; } if (hp > MaxHp) { MaxHp = hp; changed = true; } }
             if (int.TryParse(m.Groups["mp"].Value, out var mp)) { if (mp != Mp) { Mp = mp; changed = true; } }
             if (int.TryParse(m.Groups["mv"].Value, out var mv)) { if (mv != Mv) { Mv = mv; changed = true; } }
-            if (m.Groups["at"].Success && int.TryParse(m.Groups["at"].Value, out var atv)) { if (atv != At) { At = atv; changed = true; } }
-            if (m.Groups["ac"].Success && int.TryParse(m.Groups["ac"].Value, out var acv)) { if (acv != Ac) { Ac = acv; changed = true; } }
+
+            // AT optional
+            if (m.Groups["at"].Success && int.TryParse(m.Groups["at"].Value, out var atv))
+            {
+                if (atv != At) { At = atv; changed = true; }
+            }
+            else if (At != 0)
+            {
+                At = 0; changed = true;
+            }
+
+            // AC optional
+            if (m.Groups["ac"].Success && int.TryParse(m.Groups["ac"].Value, out var acv))
+            {
+                if (acv != Ac) { Ac = acv; changed = true; }
+            }
+            else if (Ac != 0)
+            {
+                Ac = 0; changed = true;
+            }
+
             if (m.Groups["state"].Success)
             {
                 var state = m.Groups["state"].Value;

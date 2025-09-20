@@ -126,11 +126,11 @@ DoorTelnet.Wpf/
 **Dependencies**: Stage 1
 
 **Deliverables**:
-- [ ] Create StatsView and StatsViewModel
-- [ ] Bind to StatsTracker events
-- [ ] Display player HP/MP/MV with visual indicators
-- [ ] Show status effects and character information
-- [ ] Implement auto-refresh functionality
+- [X] Create StatsView and StatsViewModel
+- [X] Bind to StatsTracker events
+- [X] Display player HP/MP/MV with visual indicators
+- [X] Show status effects and character information
+- [X] Implement auto-refresh functionality
 
 **Key Files**:
 - `Views/StatsView.xaml` - Statistics display layout
@@ -204,6 +204,7 @@ DoorTelnet.Wpf/
 - [ ] Connect to UiLogProvider events
 - [ ] Add filtering and search capabilities
 - [ ] Implement log export features
+- [ ] add auto-export to file based on setting.
 
 **Key Files**:
 - `Views/LogView.xaml` - Log display layout
@@ -228,8 +229,8 @@ DoorTelnet.Wpf/
 - [ ] Implement keyboard shortcuts
 - [ ] Add credential management dialogs
 - [ ] Create settings management system
-- [ ] Implement themes and styling
 - [ ] Add automation controls
+- [ ] Character profile management
 
 **Key Files**:
 - `MainWindow.xaml` - Complete integrated layout
@@ -242,7 +243,6 @@ DoorTelnet.Wpf/
 - Smooth user experience
 - Keyboard shortcuts functional
 - Settings persist correctly
-- Themes apply properly
 
 ### Stage 8: Testing and Optimization
 **Goal**: Ensure stability and performance
