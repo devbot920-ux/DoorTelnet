@@ -44,6 +44,10 @@ public partial class App : Application
             {
                 var config = ctx.Configuration;
                 services.AddSingleton<IConfiguration>(config);
+                // logging provider registration
+                services.AddSingleton<LogBuffer>(_ => new LogBuffer(500));
+                services.AddSingleton<WpfLogProvider>();
+                services.AddSingleton<LogViewModel>();
 
                 // Core singletons
                 services.AddSingleton<ScreenBuffer>(_ => new ScreenBuffer(
@@ -58,6 +62,7 @@ public partial class App : Application
                 services.AddSingleton<ISettingsService, SettingsService>();
                 services.AddSingleton(sp => new CredentialStore(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "DoorTelnet", "credentials.json")));
                 services.AddSingleton(sp => new CharacterProfileStore(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "DoorTelnet", "characters.json")));
+                services.AddSingleton<UserSelectionService>();
 
                 services.AddSingleton<TelnetClient>(sp =>
                 {
@@ -74,6 +79,8 @@ public partial class App : Application
                     var roomTracker = sp.GetRequiredService<RoomTracker>();
                     var combatTracker = sp.GetRequiredService<CombatTracker>();
                     var roomVm = sp.GetRequiredService<RoomViewModel>();
+                    var userSelection = sp.GetRequiredService<UserSelectionService>();
+                    var characterStore = sp.GetRequiredService<CharacterProfileStore>();
                     roomTracker.RoomChanged += _ => Current?.Dispatcher.BeginInvoke(roomVm.Refresh);
                     var screenField = typeof(ScriptEngine).GetField("_screen", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
 
@@ -107,75 +114,200 @@ public partial class App : Application
 
                     combatTracker.RequestInitialCommands += TrySendInitial;
 
+                    // REGEX for block parsing
+                    var spellLine = new Regex(@"^(?<mana>\d+)\s+(?<diff>\d+)\s+(?<nick>[a-zA-Z][a-zA-Z0-9]*)\s+(?<sphere>[A-Z])\s+(?<long>.+?)\s*$", RegexOptions.Compiled);
+                    var healLine = new Regex(@"^(?<short>[A-Za-z]+)\s*->\s*(?<spell>[A-Za-z ]+)\s*\(heals:?\s*(?<amt>\d+)\)", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+                    // Inventory parsing helpers (two styles: compact items line in st2, and raw inventory list between prompts)
+                    PlayerProfile profile = sp.GetRequiredService<PlayerProfile>();
+
+                    void PersistCharacterIfNew()
+                    {
+                        try
+                        {
+                            var username = userSelection.SelectedUser ?? sp.GetRequiredService<ISettingsService>().Get().Connection.LastUsername;
+                            if (string.IsNullOrWhiteSpace(username)) username = "default";
+                            var name = profile.Player.Name;
+                            if (string.IsNullOrWhiteSpace(name)) return;
+                            // Only persist if not already there
+                            characterStore.EnsureCharacterWithMeta(username,
+                                name,
+                                profile.Player.FirstName,
+                                profile.Player.LastName,
+                                profile.Player.Race,
+                                profile.Player.Walk,
+                                profile.Player.Class,
+                                profile.Player.Level,
+                                profile.Player.Experience,
+                                profile.Player.XpLeft);
+                        }
+                        catch { }
+                    }
+
+                    void ParseScreenSnapshot()
+                    {
+                        var screen = screenField?.GetValue(script) as ScreenBuffer;
+                        if (screen == null) return;
+                        var text = screen.ToText();
+                        if (string.IsNullOrWhiteSpace(text)) return;
+
+                        var lines = text.Split('\n')
+                            .Select(l => l.TrimEnd('\r'))
+                            .ToList();
+
+                        // Identity block parsing (supports lines provided by user sample)
+                        string? nameLine = lines.FirstOrDefault(l => l.StartsWith("Name", StringComparison.OrdinalIgnoreCase));
+                        string? raceLine = lines.FirstOrDefault(l => l.StartsWith("Race", StringComparison.OrdinalIgnoreCase));
+                        string? walkLine = lines.FirstOrDefault(l => l.StartsWith("Walk", StringComparison.OrdinalIgnoreCase));
+                        string? classLine = lines.FirstOrDefault(l => l.StartsWith("Class", StringComparison.OrdinalIgnoreCase));
+                        string? levelLine = lines.FirstOrDefault(l => l.Contains("Level", StringComparison.OrdinalIgnoreCase));
+
+                        string ExtractAfterColon(string? l)
+                            => string.IsNullOrWhiteSpace(l) ? string.Empty : Regex.Replace(l, @"^[^:]*:\s*", "").Trim();
+
+                        int level = 0;
+                        if (!string.IsNullOrWhiteSpace(levelLine))
+                        {
+                            var mLvl = Regex.Match(levelLine, @"Level\s*:\s*(?<lvl>\d+)");
+                            if (mLvl.Success) int.TryParse(mLvl.Groups["lvl"].Value, out level);
+                        }
+
+                        var nameVal = ExtractAfterColon(nameLine);
+                        if (!string.IsNullOrEmpty(nameVal))
+                        {
+                            // Name line may contain trailing comma segments (e.g., clan info) - keep first token
+                            var firstComma = nameVal.IndexOf(',');
+                            if (firstComma > 0) nameVal = nameVal.Substring(0, firstComma).Trim();
+                        }
+                        var raceVal = ExtractAfterColon(raceLine);
+                        var walkVal = ExtractAfterColon(walkLine);
+                        var classVal = ExtractAfterColon(classLine);
+                        if (!string.IsNullOrWhiteSpace(nameVal) || !string.IsNullOrWhiteSpace(raceVal) || !string.IsNullOrWhiteSpace(walkVal) || !string.IsNullOrWhiteSpace(classVal) || level > 0)
+                        {
+                            profile.SetIdentity(nameVal, raceVal, walkVal, classVal, level > 0 ? level : null);
+                        }
+
+                        PersistCharacterIfNew();
+
+                        // Spells table
+                        int headerIdx = lines.FindIndex(l => l.Contains("Nickname") && l.Contains("Mana"));
+                        if (headerIdx >= 0)
+                        {
+                            var newSpells = new List<SpellInfo>();
+                            for (int i = headerIdx + 1; i < lines.Count; i++)
+                            {
+                                var raw = lines[i].Trim();
+                                if (string.IsNullOrWhiteSpace(raw)) break;
+                                if (raw.StartsWith("-=-")) continue;
+                                var m = spellLine.Match(raw);
+                                if (!m.Success) continue;
+                                if (!int.TryParse(m.Groups["mana"].Value, out var mana)) continue;
+                                if (!int.TryParse(m.Groups["diff"].Value, out var diff)) diff = 0;
+                                var nick = m.Groups["nick"].Value;
+                                var sphereCode = m.Groups["sphere"].Value.FirstOrDefault();
+                                var longName = m.Groups["long"].Value.Trim();
+                                newSpells.Add(new SpellInfo { Nick = nick, LongName = longName, Mana = mana, Diff = diff, SphereCode = sphereCode, Sphere = string.Empty });
+                            }
+                            if (newSpells.Count > 0)
+                            {
+                                profile.ReplaceSpells(newSpells);
+                            }
+                        }
+
+                        // Heals list (explicit only: minheal, superheal, tolife) - derive if spells present but no explicit list
+                        var healCandidates = new[] { "minheal", "superheal", "tolife" };
+                        var heals = profile.Spells
+                            .Where(s => healCandidates.Contains(s.Nick, StringComparer.OrdinalIgnoreCase))
+                            .Select(s => new HealSpell { Short = s.Nick.Substring(0, Math.Min(3, s.Nick.Length)), Spell = s.Nick, Heals = s.Nick.Equals("minheal", StringComparison.OrdinalIgnoreCase) ? 250 : s.Nick.Equals("superheal", StringComparison.OrdinalIgnoreCase) ? 500 : 1000 })
+                            .ToList();
+                        if (heals.Count > 0)
+                        {
+                            profile.ReplaceHeals(heals);
+                        }
+
+                        // Inventory parsing from Encumbrance to Armed line: merge into CSV
+                        int encIdx = lines.FindIndex(l => l.StartsWith("Encumbrance:", StringComparison.OrdinalIgnoreCase));
+                        int armedIdx = lines.FindIndex(l => l.StartsWith("You are armed with", StringComparison.OrdinalIgnoreCase));
+                        if (encIdx >= 0 && armedIdx > encIdx)
+                        {
+                            var rawLines = new List<string>();
+                            for (int i = encIdx + 1; i < armedIdx; i++)
+                            {
+                                var raw = lines[i].Trim();
+                                if (string.IsNullOrWhiteSpace(raw)) continue;
+                                if (raw.Contains("[Hp=")) continue;
+                                if (Regex.IsMatch(raw, @"^[A-Z][a-z]+:")) continue;
+                                rawLines.Add(raw);
+                            }
+                            if (rawLines.Count > 0)
+                            {
+                                var blob = string.Join(", ", rawLines);
+                                var items = blob.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                                    .Where(s => s.Length > 1)
+                                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                                    .ToList();
+                                if (items.Count > 0) profile.ReplaceInventory(items);
+                            }
+                        }
+
+                        // Armed with parsing
+                        var armedLine = lines.FirstOrDefault(l => l.StartsWith("You are armed with", StringComparison.OrdinalIgnoreCase));
+                        if (!string.IsNullOrWhiteSpace(armedLine))
+                        {
+                            var weapon = Regex.Replace(armedLine, @"^You are armed with\s*", "", RegexOptions.IgnoreCase).Trim();
+                            if (!string.IsNullOrWhiteSpace(weapon) && weapon != profile.Player.ArmedWith)
+                            {
+                                profile.Player.ArmedWith = weapon; profile.SetIdentity(profile.Player.Name, profile.Player.Race, profile.Player.Walk, profile.Player.Class, profile.Player.Level);
+                            }
+                        }
+                        // Incarnations parsing integration
+                        if (text.Contains("Incarnations", StringComparison.OrdinalIgnoreCase))
+                        {
+                            var store = sp.GetRequiredService<CharacterProfileStore>();
+                            foreach (var entry in store.ParseIncarnations(text))
+                            {
+                                store.EnsureCharacter(userSelection.SelectedUser ?? "default", entry.name, entry.house);
+                            }
+                        }
+
+                        // XP parsing (enhanced for [Cur:.. Nxt: .. Left: ####])
+                        foreach (var ln in lines)
+                        {
+                            var mPanel = Regex.Match(ln, @"\[Cur:\s*(?<cur>\d+)\s+Nxt:\s*(?<nxt>\d+)\s+Left:\s*(?<left>\d+)\]", RegexOptions.IgnoreCase);
+                            if (mPanel.Success)
+                            {
+                                if (long.TryParse(mPanel.Groups["cur"].Value, out var curXp)) profile.SetExperience(curXp);
+                                if (long.TryParse(mPanel.Groups["left"].Value, out var leftXp)) profile.SetXpLeft(leftXp);
+                                continue;
+                            }
+                        }
+                        PersistCharacterIfNew();
+                    }
+
                     client.LineReceived += line =>
                     {
                         try
                         {
                             roomTracker.AddLine(line);
                             combatTracker.ProcessLine(line);
-                            // --- Begin PlayerProfile population logic ---
-                            var profile = sp.GetRequiredService<PlayerProfile>();
-                            // Detect spells listing: assume lines like "nick - Long Name (Sphere) mana:## diff:##"
-                            var spellMatch = Regex.Match(line, @"^(?<nick>[a-zA-Z]+)\s+[-:]\s+(?<long>[^()]+)\((?<sphere>[^)]+)\)\s+mana:?\s*(?<mana>\d+)\s+diff:?\s*(?<diff>\d+)", RegexOptions.IgnoreCase);
-                            if (spellMatch.Success)
+
+                            // Minimal single-line fallback for name/class if not yet set
+                            if (profile.Player.Name.Length == 0 || profile.Player.Class.Length == 0)
                             {
-                                var nick = spellMatch.Groups["nick"].Value.Trim();
-                                profile.AddOrUpdateSpell(new SpellInfo
+                                var mc = Regex.Match(line, @"Name\s*:?\s*(?<nm>[A-Za-z][A-Za-z]+).{0,40}Class\s*:?\s*(?<cls>[A-Za-z]+)", RegexOptions.IgnoreCase);
+                                if (mc.Success)
                                 {
-                                    Nick = nick,
-                                    LongName = spellMatch.Groups["long"].Value.Trim(),
-                                    Sphere = spellMatch.Groups["sphere"].Value.Trim(),
-                                    Mana = int.Parse(spellMatch.Groups["mana"].Value),
-                                    Diff = int.Parse(spellMatch.Groups["diff"].Value)
-                                });
+                                    profile.SetNameClass(mc.Groups["nm"].Value.Trim(), mc.Groups["cls"].Value.Trim());
+                                    PersistCharacterIfNew();
+                                }
                             }
-                            // Inventory lines: simple heuristic for lines starting with item names (very loose)
-                            var invMatch = Regex.Match(line, @"^\s*(?:\d+\)|-\s+|\*\s+)?(?:(?:an?|the)\s+)?(?<name>[A-Za-z][A-Za-z' \-]{2,})$" );
-                            if (invMatch.Success && line.Length < 60 && !line.Contains(":"))
+
+                            // After any line we can snapshot parse (cheap enough; throttle with simple modulus)
+                            if (Environment.TickCount % 7 == 0)
                             {
-                                var itemName = invMatch.Groups["name"].Value.Trim();
-                                if (!string.IsNullOrWhiteSpace(itemName)) profile.AddInventoryItem(itemName);
+                                ParseScreenSnapshot();
                             }
-                            // Heals list: pattern short -> spell (heals:###)
-                            var healMatch = Regex.Match(line, @"^(?<short>[A-Za-z]+)\s*->\s*(?<spell>[A-Za-z ]+)\s*\(heals:?\s*(?<amt>\d+)\)", RegexOptions.IgnoreCase);
-                            if (healMatch.Success)
-                            {
-                                var sh = healMatch.Groups["short"].Value.Trim();
-                                profile.AddHeal(new HealSpell
-                                {
-                                    Short = sh,
-                                    Spell = healMatch.Groups["spell"].Value.Trim(),
-                                    Heals = int.Parse(healMatch.Groups["amt"].Value)
-                                });
-                            }
-                            // Shields list: assume lines like "shield: <spellname>" or standalone shield spell names
-                            var shieldMatch = Regex.Match(line, @"(shield|aegis|barrier)\b", RegexOptions.IgnoreCase);
-                            if (shieldMatch.Success)
-                            {
-                                var shName = shieldMatch.Value.Trim();
-                                profile.AddShield(shName);
-                            }
-                            // Character basic stats block detection; simple capture of name/class on line like "Name : Bob    Class : Cleric"
-                            var nameClassMatch = Regex.Match(line, @"Name\s*:\s*(?<nm>[A-Za-z][A-Za-z]+).*Class\s*:\s*(?<cls>[A-Za-z]+)", RegexOptions.IgnoreCase);
-                            if (nameClassMatch.Success)
-                            {
-                                profile.SetNameClass(nameClassMatch.Groups["nm"].Value.Trim(), nameClassMatch.Groups["cls"].Value.Trim());
-                            }
-                            // Detect shield fade/cast lines
-                            if (Regex.IsMatch(line, @"shield fades", RegexOptions.IgnoreCase)) profile.SetShielded(false);
-                            if (Regex.IsMatch(line, @"You are surrounded by a magical shield", RegexOptions.IgnoreCase)) profile.SetShielded(true);
-                            // AutoAttack: on seeing a monster engaged message if flag set
-                            if (profile.Features.AutoAttack && Regex.IsMatch(line, @"^You see (?:an?|the) ([A-Za-z' -]+) here\.", RegexOptions.IgnoreCase))
-                            {
-                                var mob = Regex.Match(line, @"^You see (?:an?|the) (?<m>[A-Za-z' -]+) here", RegexOptions.IgnoreCase).Groups["m"].Value.Trim();
-                                if (!string.IsNullOrWhiteSpace(mob)) client.SendCommand($"kill {mob.Split(' ')[0]}");
-                            }
-                            // AutoRing placeholder (if AutoRing just ring bell/gong variant)
-                            if (profile.Features.AutoRing && Regex.IsMatch(line, @"^The gong reverberates", RegexOptions.IgnoreCase))
-                            {
-                                client.SendCommand("ring gong");
-                            }
-                            // --- End PlayerProfile population logic ---
+
                             if (!initialCommandsSent)
                             {
                                 var chk = line.Trim();
@@ -197,22 +329,34 @@ public partial class App : Application
                         catch { }
                     };
 
-                    _ = Task.Run(async () =>
+                    _ = System.Threading.Tasks.Task.Run(async () =>
                     {
-                        await Task.Delay(4000);
+                        await System.Threading.Tasks.Task.Delay(4000);
                         TrySendInitial();
                     });
                     return client;
                 });
 
                 services.AddSingleton<PlayerProfile>();
-                services.AddSingleton<AutomationFeatureService>();
+                services.AddSingleton<AutomationFeatureService>(sp =>
+                {
+                    var stats = sp.GetRequiredService<StatsTracker>();
+                    var profile = sp.GetRequiredService<PlayerProfile>();
+                    var client = sp.GetRequiredService<TelnetClient>();
+                    var room = sp.GetRequiredService<RoomTracker>();
+                    var combat = sp.GetRequiredService<CombatTracker>();
+                    var charStore = sp.GetRequiredService<CharacterProfileStore>();
+                    var logger = sp.GetRequiredService<ILogger<AutomationFeatureService>>();
+                    
+                    return new AutomationFeatureService(stats, profile, client, room, combat, charStore, logger);
+                });
 
                 // ViewModels / dialogs
                 services.AddTransient<SettingsViewModel>();
                 services.AddTransient<CredentialsViewModel>();
                 services.AddTransient<CharacterProfilesViewModel>();
                 services.AddTransient<CharacterSheetViewModel>();
+                services.AddTransient<HotKeysViewModel>();
 
                 services.AddSingleton<StatsViewModel>();
                 services.AddSingleton<RoomViewModel>();
@@ -221,9 +365,14 @@ public partial class App : Application
 
                 services.AddSingleton<MainWindow>(sp =>
                 {
-                    // Force automation service creation (hooks Telnet events)
                     _ = sp.GetRequiredService<AutomationFeatureService>();
-                    var w = new MainWindow { DataContext = sp.GetRequiredService<MainViewModel>() };
+                    
+                    // Add WPF log provider to logging after DI container is built
+                    var loggerFactory = sp.GetRequiredService<ILoggerFactory>();
+                    var wpfLogProvider = sp.GetRequiredService<WpfLogProvider>();
+                    loggerFactory.AddProvider(wpfLogProvider);
+                    
+                    var w = new MainWindow { DataContext = sp.GetRequiredService<MainViewModel>(), LogVm = sp.GetRequiredService<LogViewModel>() };
                     var settings = sp.GetRequiredService<ISettingsService>();
                     var ui = settings.Get().UI;
                     if (ui.Width > 400 && ui.Height > 300)

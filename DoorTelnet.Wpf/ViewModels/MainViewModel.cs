@@ -12,6 +12,9 @@ using Microsoft.Extensions.DependencyInjection;
 using DoorTelnet.Core.Player;
 using System.Linq;
 using System.Windows;
+using System.Collections.ObjectModel;
+using System.ComponentModel;
+using System.IO; // added
 
 namespace DoorTelnet.Wpf.ViewModels;
 
@@ -24,11 +27,57 @@ public partial class MainViewModel : ViewModelBase
     private readonly ISettingsService _settingsService;
     private readonly System.IServiceProvider _serviceProvider;
     private readonly CredentialStore _credentialStore;
-    private readonly PlayerProfile _profile; // injected player profile shared state
+    private readonly PlayerProfile _profile;
+    private readonly UserSelectionService _userSelection; // new shared selection service
 
     public StatsViewModel Stats { get; }
     public RoomViewModel Room { get; }
     public CombatViewModel Combat { get; }
+
+    // Status bar derived
+    public string ProfileName { get { return _profile.Player.Name; } set { } }
+    public int InventoryCount { get { return _profile.Player.Inventory.Count; } set { } }
+    public int SpellsCount { get { return _profile.Spells.Count; } set { } }
+    public string ShieldedStatus { get { return _profile.Effects.Shielded ? "Yes" : "No"; } set { } }
+    public string HungerStatus { get { return string.IsNullOrWhiteSpace(_profile.Effects.HungerState) ? "?" : _profile.Effects.HungerState; } set { } }
+    public string ThirstStatus { get { return string.IsNullOrWhiteSpace(_profile.Effects.ThirstState) ? "?" : _profile.Effects.ThirstState; } set { } }
+    public long Experience { get { return _profile.Player.Experience; } set { } }
+    public long XpLeft { get { return _profile.Player.XpLeft; } set { } }
+    public string ArmedWith { get { return _profile.Player.ArmedWith; } set { } }
+    public string FirstName { get { return _profile.Player.FirstName; } set { } }
+
+    public ObservableCollection<MenuUserItem> UserMenuItems { get; } = new();
+
+    public class MenuUserItem : INotifyPropertyChanged
+    {
+        public string Name { get; set; } = string.Empty;
+        private bool _isSelected;
+        public bool IsSelected { get => _isSelected; set { if (_isSelected != value) { _isSelected = value; PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsSelected))); } } }
+        public event PropertyChangedEventHandler? PropertyChanged;
+    }
+
+    private void RebuildUserMenu()
+    {
+        UserMenuItems.Clear();
+        foreach (var u in _credentialStore.ListUsernames())
+        {
+            UserMenuItems.Add(new MenuUserItem { Name = u, IsSelected = string.Equals(u, SelectedUser, StringComparison.OrdinalIgnoreCase) });
+        }
+    }
+
+    private void RaiseProfileBar()
+    {
+        OnPropertyChanged(nameof(ProfileName));
+        OnPropertyChanged(nameof(InventoryCount));
+        OnPropertyChanged(nameof(SpellsCount));
+        OnPropertyChanged(nameof(ShieldedStatus));
+        OnPropertyChanged(nameof(HungerStatus));
+        OnPropertyChanged(nameof(ThirstStatus));
+        OnPropertyChanged(nameof(Experience));
+        OnPropertyChanged(nameof(XpLeft));
+        OnPropertyChanged(nameof(ArmedWith));
+        OnPropertyChanged(nameof(FirstName));
+    }
 
     public MainViewModel(
         TelnetClient client,
@@ -42,8 +91,8 @@ public partial class MainViewModel : ViewModelBase
         ISettingsService settingsService,
         System.IServiceProvider serviceProvider,
         CredentialStore credentialStore,
-        PlayerProfile profile)
-        : base(logger)
+        PlayerProfile profile,
+        UserSelectionService userSelection) : base(logger)
     {
         _client = client;
         _config = config;
@@ -52,11 +101,13 @@ public partial class MainViewModel : ViewModelBase
         _settingsService = settingsService;
         _serviceProvider = serviceProvider;
         _credentialStore = credentialStore;
-        _profile = profile; // assign
+        _profile = profile;
+        _userSelection = userSelection;
         Stats = statsViewModel;
         Room = roomViewModel;
         Combat = combatViewModel;
         ConnectionStatus = "Disconnected";
+
         ConnectCommand = new AsyncRelayCommand(ConnectAsync, CanConnect);
         DisconnectCommand = new AsyncRelayCommand(DisconnectAsync, () => IsConnected);
         ToggleConnectionCommand = new AsyncRelayCommand(ToggleConnectionAsync, () => !IsBusy);
@@ -64,12 +115,18 @@ public partial class MainViewModel : ViewModelBase
         ShowCredentialsCommand = new RelayCommand(OpenCredentials);
         ShowCharactersCommand = new RelayCommand(OpenCharacters);
         ShowCharacterSheetCommand = new RelayCommand(OpenCharacterSheet);
+        ShowHotKeysCommand = new RelayCommand(OpenHotKeys);
         RefreshStatsCommand = new RelayCommand(SendStatsRequest, () => IsConnected);
         SendInitialDataCommand = new RelayCommand(SendInitialData, () => IsConnected);
         SendUsernameCommand = new RelayCommand(SendUsername, () => IsConnected && GetPreferredUsername() != null);
         SendPasswordCommand = new RelayCommand(SendPassword, () => IsConnected && GetPreferredPassword() != null);
         QuickLoginCommand = new AsyncRelayCommand(QuickLoginAsync, () => IsConnected && GetPreferredUsername() != null && GetPreferredPassword() != null);
-        ToggleAutoGongCommand = new RelayCommand(() => { _profile.Features.AutoGong = !_profile.Features.AutoGong; OnPropertyChanged(nameof(AutoGong)); OnPropertyChanged(nameof(AutoGongButtonText)); });
+        SelectUserCommand = new RelayCommand<string>(u => { if (!string.IsNullOrWhiteSpace(u)) SelectedUser = u; });
+
+        SelectedUser = _userSelection.SelectedUser ?? (!string.IsNullOrWhiteSpace(_settingsService.Get().Connection.LastUsername) ? _settingsService.Get().Connection.LastUsername : _credentialStore.ListUsernames().FirstOrDefault());
+        RebuildUserMenu();
+
+        _profile.Updated += () => App.Current.Dispatcher.Invoke(RaiseProfileBar);
 
         _client.ConnectionFailed += msg =>
         {
@@ -95,12 +152,13 @@ public partial class MainViewModel : ViewModelBase
     public ICommand ShowCredentialsCommand { get; }
     public ICommand ShowCharactersCommand { get; }
     public ICommand ShowCharacterSheetCommand { get; }
+    public ICommand ShowHotKeysCommand { get; }
     public ICommand RefreshStatsCommand { get; }
     public ICommand SendInitialDataCommand { get; }
     public ICommand SendUsernameCommand { get; }
     public ICommand SendPasswordCommand { get; }
     public ICommand QuickLoginCommand { get; }
-    public ICommand ToggleAutoGongCommand { get; }
+    public ICommand SelectUserCommand { get; }
 
     private bool _isConnected;
     public bool IsConnected
@@ -143,6 +201,8 @@ public partial class MainViewModel : ViewModelBase
 
     public string ConnectButtonText => IsConnected ? "Disconnect" : "Connect";
     public string AutoGongButtonText => AutoGong ? "Auto Gong: ON" : "Auto Gong: OFF";
+    public string AutoAttackButtonText => AutoAttack ? "Auto Attack: ON" : "Auto Attack: OFF";
+    public string CurrentUserButtonText => string.IsNullOrWhiteSpace(SelectedUser) ? "No User" : SelectedUser;
 
     private string _connectionStatus = string.Empty;
     public string ConnectionStatus
@@ -170,7 +230,7 @@ public partial class MainViewModel : ViewModelBase
             await _client.ConnectAsync(host, port);
             await _client.StartAsync();
             IsConnected = true;
-            ConnectionStatus = $"Connected to {host}:{port}";
+            ConnectionStatus = $"Connected"; // simplified status text
         }
         finally { IsBusy = false; }
     }
@@ -208,7 +268,7 @@ public partial class MainViewModel : ViewModelBase
 
     private string? GetPreferredUsername()
     {
-        var user = _settingsService.Get().Connection.LastUsername;
+        var user = SelectedUser ?? _settingsService.Get().Connection.LastUsername;
         if (!string.IsNullOrWhiteSpace(user) && _credentialStore.ListUsernames().Contains(user)) return user;
         return _credentialStore.ListUsernames().FirstOrDefault();
     }
@@ -247,8 +307,77 @@ public partial class MainViewModel : ViewModelBase
         var pwd = GetPreferredPassword();
         if (user == null || pwd == null) return;
         _client.SendCommand(user);
-        await Task.Delay(300); // slight delay to let server prompt for password
+        await Task.Delay(300);
         _client.SendCommand(pwd);
+        // After quick login, optionally run login script
+        try
+        {
+            var cfgPath = System.IO.Path.Combine(AppContext.BaseDirectory, "appsettings.json");
+            if (File.Exists(cfgPath))
+            {
+                var json = System.Text.Json.JsonDocument.Parse(File.ReadAllText(cfgPath));
+                bool send = false; string script = string.Empty;
+                if (json.RootElement.TryGetProperty("script", out var scriptObj))
+                {
+                    if (scriptObj.TryGetProperty("sendLoginScript", out var sendProp) && sendProp.ValueKind == System.Text.Json.JsonValueKind.True) send = true;
+                    if (scriptObj.TryGetProperty("loginScript", out var loginProp) && loginProp.ValueKind == System.Text.Json.JsonValueKind.String) script = loginProp.GetString() ?? string.Empty;
+                }
+                if (send && !string.IsNullOrWhiteSpace(script))
+                {
+                    await ExecuteScriptAsync(script);
+                }
+            }
+        }
+        catch { }
+    }
+
+    // Simple script parser supporting {ENTER} and {WAIT:ms}
+    private async Task ExecuteScriptAsync(string script)
+    {
+        if (string.IsNullOrEmpty(script)) return;
+        var buffer = new System.Text.StringBuilder();
+        for (int i = 0; i < script.Length; i++)
+        {
+            char ch = script[i];
+            if (ch == '{')
+            {
+                int end = script.IndexOf('}', i + 1);
+                if (end == -1)
+                {
+                    buffer.Append(ch); // treat as literal
+                    continue;
+                }
+                var token = script.Substring(i + 1, end - i - 1).Trim();
+                await FlushBufferAsync(buffer);
+                if (string.Equals(token, "ENTER", StringComparison.OrdinalIgnoreCase))
+                {
+                    _client.SendCommand(string.Empty);
+                }
+                else if (token.StartsWith("WAIT:", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (int.TryParse(token.Substring(5), out var ms) && ms > 0 && ms < 60000)
+                    {
+                        await Task.Delay(ms);
+                    }
+                }
+                i = end; // advance past }
+            }
+            else
+            {
+                buffer.Append(ch);
+            }
+        }
+        await FlushBufferAsync(buffer);
+    }
+
+    private Task FlushBufferAsync(System.Text.StringBuilder sb)
+    {
+        if (sb.Length > 0)
+        {
+            _client.SendCommand(sb.ToString());
+            sb.Clear();
+        }
+        return Task.CompletedTask;
     }
 
     private void OpenSettings()
@@ -263,7 +392,6 @@ public partial class MainViewModel : ViewModelBase
         var vm = _serviceProvider.GetRequiredService<CredentialsViewModel>();
         var win = new CredentialsDialog(vm) { Owner = App.Current.MainWindow };
         win.ShowDialog();
-        // After possible edits, update command enabled state
         (SendUsernameCommand as RelayCommand)?.NotifyCanExecuteChanged();
         (SendPasswordCommand as RelayCommand)?.NotifyCanExecuteChanged();
         (QuickLoginCommand as AsyncRelayCommand)?.NotifyCanExecuteChanged();
@@ -276,7 +404,6 @@ public partial class MainViewModel : ViewModelBase
         win.ShowDialog();
     }
 
-    // Global automation toggle (Auto Gong) exposed to UI
     public bool AutoGong
     {
         get => _profile.Features.AutoGong;
@@ -291,12 +418,33 @@ public partial class MainViewModel : ViewModelBase
         }
     }
 
+    public bool AutoAttack
+    {
+        get => _profile.Features.AutoAttack;
+        set
+        {
+            if (_profile.Features.AutoAttack != value)
+            {
+                _profile.Features.AutoAttack = value;
+                OnPropertyChanged();
+                OnPropertyChanged(nameof(AutoAttackButtonText));
+            }
+        }
+    }
+
     private void OpenCharacterSheet()
     {
         var vm = _serviceProvider.GetService<CharacterSheetViewModel>();
         if (vm == null) return;
-        vm.RefreshFromProfile(); // ensure latest data each time opened
+        vm.RefreshFromProfile();
         var win = new CharacterSheetDialog(vm) { Owner = App.Current.MainWindow };
+        win.ShowDialog();
+    }
+
+    private void OpenHotKeys()
+    {
+        var vm = _serviceProvider.GetRequiredService<HotKeysViewModel>();
+        var win = new Views.Dialogs.HotKeysDialog(vm) { Owner = App.Current.MainWindow };
         win.ShowDialog();
     }
 
@@ -305,6 +453,30 @@ public partial class MainViewModel : ViewModelBase
         if (IsConnected)
         {
             _ = DisconnectAsync();
+        }
+    }
+    private string? _selectedUser;
+    public string? SelectedUser
+    {
+        get => _selectedUser;
+        set
+        {
+            if (_selectedUser != value)
+            {
+                _selectedUser = value;
+                _userSelection.SelectedUser = value;
+                // Persist to settings
+                try
+                {
+                    var s = _settingsService.Get();
+                    s.Connection.LastUsername = value ?? string.Empty;
+                    _settingsService.Save();
+                }
+                catch { }
+                OnPropertyChanged();
+                OnPropertyChanged(nameof(CurrentUserButtonText));
+                RebuildUserMenu();
+            }
         }
     }
 }

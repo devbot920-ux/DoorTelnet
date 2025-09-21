@@ -79,6 +79,7 @@ public class CombatViewModel : ViewModelBase
                 match.DurationSeconds = combat.DurationSeconds;
                 match.DpsDealt = combat.DurationSeconds > 0 ? combat.DamageDealt / combat.DurationSeconds : 0;
                 match.DpsTaken = combat.DurationSeconds > 0 ? combat.DamageTaken / combat.DurationSeconds : 0;
+                match.IsTargeted = combat.IsTargeted;
             }
             UpdateStatsThrottled();
         });
@@ -165,6 +166,8 @@ public class CombatViewModel : ViewModelBase
         private double _dpsDealt; public double DpsDealt { get => _dpsDealt; set => SetProperty(ref _dpsDealt, value); }
         private double _dpsTaken; public double DpsTaken { get => _dpsTaken; set => SetProperty(ref _dpsTaken, value); }
         private DateTime _start = DateTime.UtcNow; public DateTime StartTime { get => _start; set => SetProperty(ref _start, value); }
+        private bool _isTargeted; public bool IsTargeted { get => _isTargeted; set => SetProperty(ref _isTargeted, value); }
+        
         public static ActiveCombatDisplay From(ActiveCombat ac) => new()
         {
             MonsterName = ac.MonsterName,
@@ -173,7 +176,8 @@ public class CombatViewModel : ViewModelBase
             DurationSeconds = ac.DurationSeconds,
             DpsDealt = ac.DurationSeconds > 0 ? ac.DamageDealt / ac.DurationSeconds : 0,
             DpsTaken = ac.DurationSeconds > 0 ? ac.DamageTaken / ac.DurationSeconds : 0,
-            StartTime = ac.StartTime
+            StartTime = ac.StartTime,
+            IsTargeted = ac.IsTargeted
         };
     }
 

@@ -24,15 +24,25 @@ public class StatsTracker
         get { lock (_sync) return MaxHp > 0 ? (double)Hp / MaxHp : 1.0; }
     }
 
-    // CLI proven pattern: [Hp=###/Mp=###/Mv=###(/At=###)?(/Ac=###)? (state)?]
+    // Original CLI pattern
     private readonly Regex _statsRegex = new(@"\[Hp=(?<hp>\d+)/Mp=(?<mp>\d+)/Mv=(?<mv>\d+)(?:/At=(?<at>\d+))?(?:/Ac=(?<ac>\d+))?(?: \((?<state>resting|healing)\))?\]", RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
+    // Loose pattern to tolerate truncated leading characters, missing '[', missing 'H' in 'Hp', and trailing text
+    // Examples matched: "p=2018/Mp=750/Mv=1051/Ac=2]", "Hp=123/Mp=50/Mv=99/At=10/Ac=2] You are getting pretty hungry." etc.
+    private readonly Regex _looseRegex = new(@"(?:(?:\[)?(?:H)?p=(?<hp>\d+)/Mp=(?<mp>\d+)/Mv=(?<mv>\d+)(?:/At=(?<at>\d+))?(?:/Ac=(?<ac>\d+))?\]?)(?:[^\[]*?\((?<state>resting|healing)\))?", RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
+    // Hitpoints line from 'stats' / 'st' command: e.g. "Hitpoints:  1518/2115"
+    private readonly Regex _hitpointsRegex = new(@"Hitpoints:\s*(?<hp>\d+)\s*/\s*(?<max>\d+)", RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
     /// <summary>
-    /// Attempt to parse a line; returns true if it matched the stats line pattern.
+    /// Attempt to parse a line; returns true if it matched any stats-related pattern.
     /// </summary>
     public bool ParseIfStatsLine(string line)
     {
-        return TryParseLine(line, _statsRegex);
+        if (TryParseLine(line, _statsRegex)) return true;
+        if (TryParseLine(line, _looseRegex)) return true;
+        if (TryParseHitpointsLine(line)) return true; // new fallback source for MaxHp when using 'stats' command
+        return false;
     }
 
     public (int hp, int max, int mp, int mv, int at, int ac, string? state) GetSnapshot()
@@ -84,6 +94,30 @@ public class StatsTracker
             else if (State != null)
             {
                 State = null; changed = true;
+            }
+        }
+        if (changed) Updated?.Invoke();
+        return true;
+    }
+
+    private bool TryParseHitpointsLine(string line)
+    {
+        if (string.IsNullOrWhiteSpace(line)) return false;
+        var m = _hitpointsRegex.Match(line);
+        if (!m.Success) return false;
+        bool changed = false;
+        lock (_sync)
+        {
+            if (int.TryParse(m.Groups["hp"].Value, out var hp))
+            {
+                if (hp != Hp) { Hp = hp; changed = true; }
+            }
+            if (int.TryParse(m.Groups["max"].Value, out var max))
+            {
+                // Accept new max if different (the stats command is authoritative)
+                if (max != MaxHp) { MaxHp = max; changed = true; }
+                // If current hp somehow exceeds new max (rare), clamp
+                if (Hp > MaxHp) { Hp = MaxHp; changed = true; }
             }
         }
         if (changed) Updated?.Invoke();

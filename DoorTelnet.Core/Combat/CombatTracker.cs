@@ -1,5 +1,6 @@
 using System.Text.RegularExpressions;
 using DoorTelnet.Core.World;
+using System.Linq;
 
 namespace DoorTelnet.Core.Combat;
 
@@ -80,6 +81,16 @@ public class ActiveCombat
     public DateTime? DeathTime { get; set; }
     
     /// <summary>
+    /// Indicates if this monster is currently targeted for melee combat
+    /// </summary>
+    public bool IsTargeted { get; set; }
+    
+    /// <summary>
+    /// When this monster was targeted for melee combat
+    /// </summary>
+    public DateTime? TargetedTime { get; set; }
+    
+    /// <summary>
     /// Duration of the combat in seconds
     /// </summary>
     public double DurationSeconds 
@@ -151,6 +162,11 @@ public class CombatTracker
         @"\[Hp=\d+/Mp=\d+/Mv=\d+(?:/At=\d+)?(?:/Ac=\d+)?\]",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
     
+    // Melee targeting pattern - matches "You circle the challenger and prepare to attack!"
+    private static readonly Regex MeleeTargetingPattern = new(
+        @"You circle the (.+?) and prepare to attack!",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    
     // Death detection patterns - using the same logic as RoomModels
     private static readonly string[] DeathWords = 
     {
@@ -166,6 +182,8 @@ public class CombatTracker
     public event Action<string>? MonsterDeath; // For logging purposes
     public event Action? RequestExperienceCheck; // Request XP command after death
     public event Action? RequestInitialCommands; // Request initial commands when joining game
+    public event Action<string>? MonsterTargeted; // Fired when a monster is targeted for melee combat
+    public event Action<string>? MonsterBecameAggressive; // Fired when a monster becomes aggressive due to damaging player
     
     /// <summary>
     /// Initialize combat tracker with optional room tracker for enhanced monster identification
@@ -283,44 +301,40 @@ public class CombatTracker
     /// <returns>True if the line contained combat-related information</returns>
     public bool ProcessLine(string line)
     {
-        if (string.IsNullOrWhiteSpace(line))
-            return false;
-        
-        // Clean the line first
+        if (string.IsNullOrWhiteSpace(line)) return false;
         var cleanedLine = CleanLineContent(line);
-        if (string.IsNullOrWhiteSpace(cleanedLine))
-            return false;
-        
+        if (string.IsNullOrWhiteSpace(cleanedLine)) return false;
         bool foundCombatEvent = false;
-        
-        // Try to detect player damage (You ... damage)
-        if (TryParsePlayerDamage(cleanedLine, out var playerDamage))
+
+        if (_previousCleanLine != null && cleanedLine.Contains("You suffered", StringComparison.OrdinalIgnoreCase))
         {
-            RecordPlayerDamage(playerDamage.target, playerDamage.damage);
+            var dmgMatch = NumberRegex.Match(cleanedLine);
+            if (dmgMatch.Success && int.TryParse(dmgMatch.Value, out var dmg))
+            {
+                string? attacker = FindMatchingRoomMonster(_previousCleanLine);
+                if (!string.IsNullOrWhiteSpace(attacker) && !attacker.Contains("suffered", StringComparison.OrdinalIgnoreCase))
+                {
+                    RecordMonsterDamage(attacker, dmg);
+                    foundCombatEvent = true;
+                    _previousCleanLine = cleanedLine;
+                    return foundCombatEvent; 
+
+                }
+            }
+        }
+        _previousCleanLine = cleanedLine;
+
+        // Check for melee targeting first (happens when player initiates attack)
+        if (TryParseMeleeTargeting(cleanedLine, out var targetedMonster))
+        {
+            // TryParseMeleeTargeting now handles everything - no need for additional calls
             foundCombatEvent = true;
         }
-        
-        // Try to detect monster damage (A/An/The ... you ... damage)
-        if (TryParseMonsterDamage(cleanedLine, out var monsterDamage))
-        {
-            RecordMonsterDamage(monsterDamage.monster, monsterDamage.damage);
-            foundCombatEvent = true;
-        }
-        
-        // Try to detect death events
-        if (TryParseDeathEvent(cleanedLine, out var deathInfo))
-        {
-            ProcessMonsterDeath(deathInfo.monsters);
-            foundCombatEvent = true;
-        }
-        
-        // Try to detect experience messages
-        if (TryParseExperience(cleanedLine, out var experience))
-        {
-            AssignExperienceToRecentCombats(experience);
-            foundCombatEvent = true;
-        }
-        
+
+        if (TryParsePlayerDamage(cleanedLine, out var playerDamage)) { RecordPlayerDamage(playerDamage.target, playerDamage.damage); foundCombatEvent = true; }
+        if (TryParseMonsterDamage(cleanedLine, out var monsterDamage)) { RecordMonsterDamage(monsterDamage.monster, monsterDamage.damage); foundCombatEvent = true; }
+        if (TryParseDeathEvent(cleanedLine, out var deathInfo)) { ProcessMonsterDeath(deathInfo.monsters); foundCombatEvent = true; }
+        if (TryParseExperience(cleanedLine, out var experience)) { AssignExperienceToRecentCombats(experience); foundCombatEvent = true; }
         return foundCombatEvent;
     }
     
@@ -333,32 +347,55 @@ public class CombatTracker
         if (currentRoom?.Monsters == null || currentRoom.Monsters.Count == 0)
             return null;
         
-        // Check monsters in the room
+        // Check monsters in the room - prioritize exact matches first
+        var candidates = new List<(string monsterName, int priority)>();
+        
         foreach (var monster in currentRoom.Monsters)
         {
             var monsterName = monster.Name?.Replace(" (summoned)", "") ?? "";
             if (string.IsNullOrWhiteSpace(monsterName))
                 continue;
             
-            // Check exact match first
+            // Priority 1: Exact match (highest priority)
             if (line.Contains(monsterName, StringComparison.OrdinalIgnoreCase))
-                return monsterName;
+            {
+                candidates.Add((monsterName, 1));
+                continue;
+            }
             
-            // Check without articles
+            // Priority 2: Match without articles
             var withoutArticles = RemoveArticles(monsterName);
             if (line.Contains(withoutArticles, StringComparison.OrdinalIgnoreCase))
-                return monsterName;
-            
-            // Check individual words in the monster name (for partial matches)
-            var words = monsterName.Split(' ', StringSplitOptions.RemoveEmptyEntries);
-            foreach (var word in words)
             {
-                if (word.Length >= 3 && line.Contains(word, StringComparison.OrdinalIgnoreCase))
-                    return monsterName;
+                candidates.Add((monsterName, 2));
+                continue;
+            }
+            
+            // Priority 3: Match individual words (but only for multi-word monster names to avoid false positives)
+            if (monsterName.Contains(' '))
+            {
+                var words = monsterName.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+                bool allWordsMatch = true;
+                
+                // Check if ALL significant words from the monster name appear in the line
+                foreach (var word in words)
+                {
+                    if (word.Length >= 3 && !line.Contains(word, StringComparison.OrdinalIgnoreCase))
+                    {
+                        allWordsMatch = false;
+                        break;
+                    }
+                }
+                
+                if (allWordsMatch && words.Length > 1) // Only if it's a multi-word name
+                {
+                    candidates.Add((monsterName, 3));
+                }
             }
         }
         
-        return null;
+        // Return the highest priority match
+        return candidates.OrderBy(c => c.priority).FirstOrDefault().monsterName;
     }
     
     /// <summary>
@@ -521,7 +558,7 @@ public class CombatTracker
         var firstWord = words[0].ToLowerInvariant();
         var lastWord = words[^1].ToLowerInvariant();
 
-        // Check if it's a death word and starts with "the" or "a/an "
+        // Check if it's a death word and starts with "the" or "a/an ";
         if (!DeathWords.Contains(lastWord))
             return false;
         if (!(firstWord == "the" || firstWord == "a" || firstWord == "an"))
@@ -645,6 +682,13 @@ public class CombatTracker
                     combat.DeathTime = DateTime.UtcNow;
                     combat.AwaitingExperience = true;
                     
+                    // Clear targeting if this was the targeted monster
+                    if (combat.IsTargeted)
+                    {
+                        combat.IsTargeted = false;
+                        combat.TargetedTime = null;
+                    }
+                    
                     // Move to awaiting experience list
                     _combatsAwaitingExperience.Add(combat);
                     _activeCombats.Remove(monsterName);
@@ -664,12 +708,15 @@ public class CombatTracker
     /// </summary>
     private void RecordPlayerDamage(string target, int damage)
     {
+        ActiveCombat? combat = null;
+        bool isNewCombat = false;
+        
         lock (_sync)
         {
             // Always resolve to exact room monster name for consistent tracking
             var resolvedTarget = ResolveToRoomMonsterName(target);
             
-            if (!_activeCombats.TryGetValue(resolvedTarget, out var combat))
+            if (!_activeCombats.TryGetValue(resolvedTarget, out combat))
             {
                 combat = new ActiveCombat
                 {
@@ -678,26 +725,39 @@ public class CombatTracker
                     LastDamageTime = DateTime.UtcNow
                 };
                 _activeCombats[resolvedTarget] = combat;
-                CombatStarted?.Invoke(combat);
+                isNewCombat = true;
             }
             
             combat.DamageDealt += damage;
             combat.LastDamageTime = DateTime.UtcNow;
+        }
+        
+        // Fire events outside the lock
+        if (isNewCombat && combat != null)
+        {
+            CombatStarted?.Invoke(combat);
+        }
+        else if (combat != null)
+        {
             CombatUpdated?.Invoke(combat);
         }
     }
     
     /// <summary>
-    /// Record damage taken from a monster
+    /// Record damage taken from a monster and mark the monster as aggressive
     /// </summary>
     private void RecordMonsterDamage(string monster, int damage)
     {
+        ActiveCombat? combat = null;
+        bool isNewCombat = false;
+        string resolvedMonster;
+        
         lock (_sync)
         {
             // Always resolve to exact room monster name for consistent tracking
-            var resolvedMonster = ResolveToRoomMonsterName(monster);
+            resolvedMonster = ResolveToRoomMonsterName(monster);
             
-            if (!_activeCombats.TryGetValue(resolvedMonster, out var combat))
+            if (!_activeCombats.TryGetValue(resolvedMonster, out combat))
             {
                 combat = new ActiveCombat
                 {
@@ -706,12 +766,52 @@ public class CombatTracker
                     LastDamageTime = DateTime.UtcNow
                 };
                 _activeCombats[resolvedMonster] = combat;
-                CombatStarted?.Invoke(combat);
+                isNewCombat = true;
             }
             
             combat.DamageTaken += damage;
             combat.LastDamageTime = DateTime.UtcNow;
+        }
+        
+        // Mark the monster as aggressive in the current room since it attacked us
+        MarkMonsterAsAggressive(resolvedMonster);
+        
+        // Fire events outside the lock
+        if (isNewCombat && combat != null)
+        {
+            CombatStarted?.Invoke(combat);
+        }
+        else if (combat != null)
+        {
             CombatUpdated?.Invoke(combat);
+        }
+    }
+    
+    /// <summary>
+    /// Mark a monster as aggressive in the current room
+    /// </summary>
+    private void MarkMonsterAsAggressive(string monsterName)
+    {
+        if (_roomTracker == null)
+            return;
+
+        // Use the room tracker's public method to update monster disposition
+        var updated = _roomTracker.UpdateMonsterDisposition(monsterName, "aggressive");
+        
+        if (updated)
+        {
+            // Log the change for debugging
+            System.Diagnostics.Debug.WriteLine($"?? Marked monster '{monsterName}' as aggressive due to damage dealt to player");
+            
+            // Fire event to notify about the disposition change
+            try
+            {
+                MonsterBecameAggressive?.Invoke(monsterName);
+            }
+            catch
+            {
+                // Ignore event handler errors
+            }
         }
     }
     
@@ -898,50 +998,209 @@ public class CombatTracker
     
     /// <summary>
     /// Check if a room monster matches a given monster reference using comprehensive logic
+    /// Enhanced to better handle multi-word monster names with spaces
     /// </summary>
     private bool DoesMonsterMatch(string roomMonsterName, string monsterReference)
     {
         if (string.IsNullOrWhiteSpace(roomMonsterName) || string.IsNullOrWhiteSpace(monsterReference))
             return false;
         
-        // Exact match
+        // Priority 1: Exact match (case insensitive)
         if (roomMonsterName.Equals(monsterReference, StringComparison.OrdinalIgnoreCase))
             return true;
         
-        // Match without articles
+        // Priority 2: Match without articles
         var roomNameNoArticles = RemoveArticles(roomMonsterName);
         var refNoArticles = RemoveArticles(monsterReference);
         
         if (roomNameNoArticles.Equals(refNoArticles, StringComparison.OrdinalIgnoreCase))
             return true;
         
-        // Check if the reference is contained in the room monster name
+        // Priority 3: Check if the reference is contained in the room monster name
         if (roomMonsterName.Contains(monsterReference, StringComparison.OrdinalIgnoreCase) ||
             roomNameNoArticles.Contains(refNoArticles, StringComparison.OrdinalIgnoreCase))
             return true;
         
-        // Check if the room monster name is contained in the reference
+        // Priority 4: Check if the room monster name is contained in the reference
         if (monsterReference.Contains(roomMonsterName, StringComparison.OrdinalIgnoreCase) ||
             refNoArticles.Contains(roomNameNoArticles, StringComparison.OrdinalIgnoreCase))
             return true;
         
-        // Check individual words (3+ characters) from room monster name against reference
-        var roomWords = roomNameNoArticles.Split(' ', StringSplitOptions.RemoveEmptyEntries);
-        foreach (var word in roomWords)
+        // Priority 5: For multi-word names, check if ALL significant words from room monster appear in reference
+        if (roomMonsterName.Contains(' ') || monsterReference.Contains(' '))
         {
-            if (word.Length >= 3 && monsterReference.Contains(word, StringComparison.OrdinalIgnoreCase))
+            var roomWords = roomNameNoArticles.Split(' ', StringSplitOptions.RemoveEmptyEntries)
+                .Where(w => w.Length >= 3) // Only significant words
+                .ToList();
+            
+            var refWords = refNoArticles.Split(' ', StringSplitOptions.RemoveEmptyEntries)
+                .Where(w => w.Length >= 3) // Only significant words
+                .ToList();
+            
+            // Check if all room monster words appear in the reference (for targeting commands like "a fire")
+            if (roomWords.Count > 0 && roomWords.All(roomWord => 
+                refWords.Any(refWord => refWord.Contains(roomWord, StringComparison.OrdinalIgnoreCase) ||
+                                       roomWord.Contains(refWord, StringComparison.OrdinalIgnoreCase))))
+            {
                 return true;
-        }
-        
-        // Check individual words (3+ characters) from reference against room monster name
-        var refWords = refNoArticles.Split(' ', StringSplitOptions.RemoveEmptyEntries);
-        foreach (var word in refWords)
-        {
-            if (word.Length >= 3 && roomMonsterName.Contains(word, StringComparison.OrdinalIgnoreCase))
+            }
+            
+            // Check if all reference words appear in the room monster name (for damage lines)
+            if (refWords.Count > 0 && refWords.All(refWord => 
+                roomWords.Any(roomWord => roomWord.Contains(refWord, StringComparison.OrdinalIgnoreCase) ||
+                                         refWord.Contains(roomWord, StringComparison.OrdinalIgnoreCase))))
+            {
                 return true;
+            }
         }
         
         return false;
+    }
+    
+    private string? _previousCleanLine; // previous cleaned line
+
+    /// <summary>
+    /// Parse melee targeting line - "You circle the challenger and prepare to attack!"
+    /// This directly handles the targeting and room updates in one place.
+    /// </summary>
+    private bool TryParseMeleeTargeting(string line, out string targetedMonster)
+    {
+        targetedMonster = string.Empty;
+        
+        var match = MeleeTargetingPattern.Match(line);
+        if (!match.Success)
+            return false;
+        
+        // Extract and normalize the monster name from the targeting message
+        var parsedMonsterName = match.Groups[1].Value.Trim();
+        targetedMonster = NormalizeMonsterName(parsedMonsterName);
+        
+        // Ensure monster exists in room and is marked as aggressive (since we attacked it)
+        var currentRoom = _roomTracker?.CurrentRoom;
+        if (currentRoom != null)
+        {
+            var monsterNameForMatching = targetedMonster; // Store in local variable for lambda
+            var existingMonster = currentRoom.Monsters.FirstOrDefault(m => 
+                DoesMonsterMatch(m.Name, monsterNameForMatching));
+            
+            if (existingMonster != null)
+            {
+                // Monster exists - update it to be aggressive if it isn't already
+                if (!existingMonster.Disposition.Equals("aggressive", StringComparison.OrdinalIgnoreCase))
+                {
+                    var updatedMonsters = currentRoom.Monsters.ToList();
+                    updatedMonsters.Remove(existingMonster);
+                    updatedMonsters.Add(new MonsterInfo(
+                        existingMonster.Name, 
+                        "aggressive", 
+                        true, // TargetingYou = true since we attacked it
+                        existingMonster.Count));
+                    
+                    currentRoom.Monsters.Clear();
+                    currentRoom.Monsters.AddRange(updatedMonsters);
+                    currentRoom.LastUpdated = DateTime.UtcNow;
+                }
+            }
+            else
+            {
+                // Monster doesn't exist - add it as aggressive and targeting us
+                currentRoom.Monsters.Add(new MonsterInfo(targetedMonster, "aggressive", true, null));
+                currentRoom.LastUpdated = DateTime.UtcNow;
+            }
+        }
+        
+        // Set this monster as targeted in combat tracking
+        lock (_sync)
+        {
+            var resolvedName = ResolveToRoomMonsterName(targetedMonster);
+            
+            // Clear targeting from all other monsters
+            foreach (var combat in _activeCombats.Values)
+            {
+                combat.IsTargeted = false;
+                combat.TargetedTime = null;
+            }
+            
+            // Set or create the targeted combat
+            if (!_activeCombats.TryGetValue(resolvedName, out var targetedCombat))
+            {
+                targetedCombat = new ActiveCombat
+                {
+                    MonsterName = resolvedName,
+                    StartTime = DateTime.UtcNow,
+                    LastDamageTime = DateTime.UtcNow,
+                    IsTargeted = true,
+                    TargetedTime = DateTime.UtcNow
+                };
+                _activeCombats[resolvedName] = targetedCombat;
+                
+                // Fire event outside the lock
+                Task.Run(() => CombatStarted?.Invoke(targetedCombat));
+            }
+            else
+            {
+                targetedCombat.IsTargeted = true;
+                targetedCombat.TargetedTime = DateTime.UtcNow;
+                
+                // Fire event outside the lock
+                Task.Run(() => CombatUpdated?.Invoke(targetedCombat));
+            }
+        }
+        
+        // Fire targeting event
+        MonsterTargeted?.Invoke(targetedMonster);
+        
+        return !string.IsNullOrWhiteSpace(targetedMonster);
+    }
+
+    /// <summary>
+    /// Get the currently targeted monster (if any) - thread safe without holding lock during external operations
+    /// </summary>
+    public ActiveCombat? GetTargetedMonster()
+    {
+        lock (_sync)
+        {
+            var targetedCombat = _activeCombats.Values.FirstOrDefault(c => c.IsTargeted);
+            if (targetedCombat == null) return null;
+            
+            // Return a copy to avoid exposing the original object outside the lock
+            return new ActiveCombat
+            {
+                MonsterName = targetedCombat.MonsterName,
+                StartTime = targetedCombat.StartTime,
+                DamageDealt = targetedCombat.DamageDealt,
+                DamageTaken = targetedCombat.DamageTaken,
+                LastDamageTime = targetedCombat.LastDamageTime,
+                AwaitingExperience = targetedCombat.AwaitingExperience,
+                DeathTime = targetedCombat.DeathTime,
+                IsTargeted = targetedCombat.IsTargeted,
+                TargetedTime = targetedCombat.TargetedTime
+            };
+        }
+    }
+    
+    /// <summary>
+    /// Test method to demonstrate the monster aggression marking functionality
+    /// Can be called from CLI or debugging to test the feature
+    /// </summary>
+    public void TestMonsterAggressionMarking()
+    {
+        // Simulate some monster damage lines that would trigger the marking
+        var testLines = new[]
+        {
+            "The goblin strikes you for 15 damage",
+            "An orc warrior hits you for 23 damage", 
+            "A fire elemental attacks you for 8 damage"
+        };
+
+        foreach (var line in testLines)
+        {
+            var success = ProcessLine(line);
+            if (success)
+            {
+                System.Diagnostics.Debug.WriteLine($"Processed damage line: {line}");
+            }
+        }
     }
 }
 

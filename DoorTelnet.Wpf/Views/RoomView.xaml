@@ -23,7 +23,22 @@
         <ItemsControl ItemsSource="{Binding Monsters}" Margin="0 2 0 8">
             <ItemsControl.ItemTemplate>
                 <DataTemplate>
-                    <TextBlock Text="{Binding DisplayName}" />
+                    <TextBlock Text="{Binding DisplayName}">
+                        <TextBlock.Style>
+                            <Style TargetType="TextBlock">
+                                <Setter Property="Foreground" Value="White" />
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding IsAggressive}" Value="True">
+                                        <Setter Property="Foreground" Value="#FFFF0000" />
+                                    </DataTrigger>
+                                    <DataTrigger Binding="{Binding TargetingYou}" Value="True">
+                                        <Setter Property="FontWeight" Value="Bold" />
+                                        <Setter Property="Foreground" Value="#FFFF0000" />
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </TextBlock.Style>
+                    </TextBlock>
                 </DataTemplate>
             </ItemsControl.ItemTemplate>
         </ItemsControl>

@@ -12,6 +12,8 @@ using DoorTelnet.Core.Scripting;
 using DoorTelnet.Core.Telnet;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Configuration;
+using System.IO; // Added for File operations
+using System.Text.Json; // Added for JSON parsing
 
 namespace DoorTelnet.Wpf.Controls;
 
@@ -387,6 +389,14 @@ public class TerminalControl : Control
     protected override void OnPreviewKeyDown(KeyEventArgs e)
     {
         base.OnPreviewKeyDown(e);
+        
+        // Handle hotkeys first (F1-F12)
+        if (HandleHotKey(e.Key))
+        {
+            e.Handled = true;
+            return;
+        }
+        
         if (e.Key == Key.PageUp) { AdjustScroll(5); e.Handled = true; return; }
         if (e.Key == Key.PageDown) { AdjustScroll(-5); e.Handled = true; return; }
         if (_script == null || _scrollOffset != 0) return;
@@ -405,12 +415,70 @@ public class TerminalControl : Control
         }
     }
 
+    private bool HandleHotKey(Key key)
+    {
+        string? keyName = key switch
+        {
+            Key.F1 => "F1", Key.F2 => "F2", Key.F3 => "F3", Key.F4 => "F4",
+            Key.F5 => "F5", Key.F6 => "F6", Key.F7 => "F7", Key.F8 => "F8",
+            Key.F9 => "F9", Key.F10 => "F10", Key.F11 => "F11", Key.F12 => "F12",
+            _ => null
+        };
+
+        if (keyName == null) return false;
+
+        try
+        {
+            var hotKeysPath = System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "DoorTelnet", "hotkeys.json");
+            if (!System.IO.File.Exists(hotKeysPath)) return false;
+
+            var json = System.IO.File.ReadAllText(hotKeysPath);
+            using var doc = System.Text.Json.JsonDocument.Parse(json);
+            
+            if (doc.RootElement.TryGetProperty("Bindings", out var bindings))
+            {
+                foreach (var binding in bindings.EnumerateArray())
+                {
+                    if (binding.TryGetProperty("Key", out var keyProp) && 
+                        binding.TryGetProperty("Script", out var scriptProp) &&
+                        keyProp.GetString() == keyName)
+                    {
+                        var script = scriptProp.GetString();
+                        if (!string.IsNullOrWhiteSpace(script))
+                        {
+                            // Get automation service and execute script
+                            var app = (App)Application.Current;
+                            var hostField = typeof(App).GetField("_host", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+                            var host = hostField?.GetValue(app) as Microsoft.Extensions.Hosting.IHost;
+                            var automationService = host?.Services.GetService<DoorTelnet.Wpf.Services.AutomationFeatureService>();
+                            
+                            if (automationService != null)
+                            {
+                                // Access private method via reflection
+                                var executeMethod = typeof(DoorTelnet.Wpf.Services.AutomationFeatureService)
+                                    .GetMethod("ExecuteScriptAsync", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+                                executeMethod?.Invoke(automationService, new object[] { script });
+                                return true;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        catch
+        {
+            // Ignore hotkey execution errors
+        }
+        
+        return false;
+    }
+
     protected override void OnMouseWheel(MouseWheelEventArgs e)
     {
         base.OnMouseWheel(e);
         if (_buffer == null) return;
-        // Convert delta (120 units per notch) to lines; accumulate velocity
-        double lines = (e.Delta / 120.0) * 3.0; // 3 lines per notch
+        // Convert delta (120 units per notch) to lines; reversed for bottom-up scrolling
+        double lines = -(e.Delta / 120.0) * 3.0; // 3 lines per notch, negative for natural scrolling
         _scrollVelocity += lines;
         if (!_inertiaActive)
         {

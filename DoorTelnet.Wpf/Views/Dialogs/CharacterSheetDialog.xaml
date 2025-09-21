@@ -1,27 +1,28 @@
 <Window x:Class="DoorTelnet.Wpf.Views.Dialogs.CharacterSheetDialog"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="Character Sheet" Height="600" Width="800" Background="{StaticResource Brush.Background}" Foreground="{StaticResource Brush.Text}" WindowStartupLocation="CenterOwner">
+        xmlns:local="clr-namespace:DoorTelnet.Wpf.Views.Dialogs"
+        Title="Character Sheet" Height="660" Width="880" Background="{StaticResource Brush.Background}" Foreground="{StaticResource Brush.Text}" WindowStartupLocation="CenterOwner">
+    <Window.Resources>
+        <Style x:Key="SelectAllOnFocusTextBox" TargetType="TextBox" BasedOn="{StaticResource {x:Type TextBox}}">
+            <EventSetter Event="GotKeyboardFocus" Handler="TextBox_SelectAll" />
+            <EventSetter Event="PreviewMouseLeftButtonDown" Handler="TextBox_PreviewMouseLeftButtonDown" />
+        </Style>
+    </Window.Resources>
     <Grid Margin="8">
-        <Grid.RowDefinitions>
-            <RowDefinition Height="*" />
-        </Grid.RowDefinitions>
-        <Grid.ColumnDefinitions>
-            <ColumnDefinition Width="*" />
-        </Grid.ColumnDefinitions>
         <ScrollViewer VerticalScrollBarVisibility="Auto">
             <StackPanel>
                 <TextBlock FontSize="20" FontWeight="Bold" Text="Character" Margin="0,0,0,8" />
-                <StackPanel Orientation="Horizontal" Margin="0,0,0,12">
-                    <StackPanel Margin="0,0,20,0">
+                <WrapPanel Margin="0,0,0,12">
+                    <StackPanel Margin="0,0,28,0">
                         <TextBlock Text="Name" FontWeight="Bold"/>
-                        <TextBlock Text="{Binding Name}"/>
+                        <TextBlock Text="{Binding Name}" FontSize="14" FontWeight="SemiBold"/>
                     </StackPanel>
-                    <StackPanel>
+                    <StackPanel Margin="0,0,28,0">
                         <TextBlock Text="Class" FontWeight="Bold"/>
-                        <TextBlock Text="{Binding Class}"/>
+                        <TextBlock Text="{Binding Class}" FontSize="14" FontWeight="SemiBold"/>
                     </StackPanel>
-                </StackPanel>
+                </WrapPanel>
 
                 <GroupBox Header="Automation" Margin="0,0,0,12">
                     <StackPanel Margin="6" Orientation="Vertical">
@@ -29,21 +30,40 @@
                             <CheckBox Content="Auto Shield" IsChecked="{Binding AutoShield}" Margin="4"/>
                             <CheckBox Content="Auto Heal" IsChecked="{Binding AutoHeal}" Margin="4"/>
                             <CheckBox Content="Auto Gong" IsChecked="{Binding AutoGong}" Margin="4"/>
+                            <CheckBox Content="Auto Attack" IsChecked="{Binding AutoAttack}" Margin="4"/>
                             <CheckBox Content="Pickup Gold" IsChecked="{Binding PickupGold}" Margin="4"/>
                             <CheckBox Content="Pickup Silver" IsChecked="{Binding PickupSilver}" Margin="4"/>
                         </WrapPanel>
                         <UniformGrid Columns="3" Margin="4,8,4,0">
                             <StackPanel Margin="4">
                                 <TextBlock Text="Shield Refresh (sec)" FontSize="11"/>
-                                <TextBox Text="{Binding ShieldRefreshSec, UpdateSourceTrigger=PropertyChanged}" Width="80" />
+                                <TextBox Text="{Binding ShieldRefreshSec, UpdateSourceTrigger=PropertyChanged}" Width="90" Style="{StaticResource SelectAllOnFocusTextBox}" PreviewTextInput="NumericOnly" />
                             </StackPanel>
                             <StackPanel Margin="4">
                                 <TextBlock Text="Gong HP %" FontSize="11"/>
-                                <TextBox Text="{Binding GongMinHpPercent, UpdateSourceTrigger=PropertyChanged}" Width="80" />
+                                <TextBox Text="{Binding GongMinHpPercent, UpdateSourceTrigger=PropertyChanged}" Width="90" Style="{StaticResource SelectAllOnFocusTextBox}" PreviewTextInput="NumericOnly" />
                             </StackPanel>
                             <StackPanel Margin="4">
                                 <TextBlock Text="Auto Heal HP %" FontSize="11"/>
-                                <TextBox Text="{Binding AutoHealHpPercent, UpdateSourceTrigger=PropertyChanged}" Width="80" />
+                                <TextBox Text="{Binding AutoHealHpPercent, UpdateSourceTrigger=PropertyChanged}" Width="90" Style="{StaticResource SelectAllOnFocusTextBox}" PreviewTextInput="NumericOnly" />
+                            </StackPanel>
+                        </UniformGrid>
+                        <UniformGrid Columns="3" Margin="4,4,4,0">
+                            <StackPanel Margin="4">
+                                <TextBlock Text="Warning Heal HP %" FontSize="11"/>
+                                <TextBox Text="{Binding WarningHealHpPercent, UpdateSourceTrigger=PropertyChanged}" Width="90" Style="{StaticResource SelectAllOnFocusTextBox}" PreviewTextInput="NumericOnly" />
+                            </StackPanel>
+                            <StackPanel Margin="4">
+                                <TextBlock Text="Critical HP %" FontSize="11"/>
+                                <TextBox Text="{Binding CriticalHpPercent, UpdateSourceTrigger=PropertyChanged}" Width="90" Style="{StaticResource SelectAllOnFocusTextBox}" PreviewTextInput="NumericOnly" />
+                            </StackPanel>
+                            <StackPanel Margin="4">
+                                <TextBlock Text="Critical Action" FontSize="11"/>
+                                <ComboBox SelectedItem="{Binding CriticalAction}" Width="90">
+                                    <ComboBoxItem Content="stop"/>
+                                    <ComboBoxItem Content="disconnect"/>
+                                    <ComboBoxItem Content="script:{command}"/>
+                                </ComboBox>
                             </StackPanel>
                         </UniformGrid>
                     </StackPanel>
@@ -63,36 +83,36 @@
                     <TextBlock Text="Shields" FontWeight="Bold" Grid.Column="1"/>
                     <TextBlock Text="Inventory" FontWeight="Bold" Grid.Column="2"/>
 
-                    <ListBox Grid.Row="1" Grid.Column="0" ItemsSource="{Binding Heals}" Height="120">
+                    <ListBox Grid.Row="1" Grid.Column="0" ItemsSource="{Binding Heals}" Height="140" Background="#202429" BorderBrush="#333">
                         <ListBox.ItemTemplate>
                             <DataTemplate>
-                                <StackPanel Orientation="Horizontal" Margin="2">
-                                    <TextBlock Text="{Binding Short}" FontWeight="Bold" Margin="0,0,6,0"/>
+                                <DockPanel Margin="2">
+                                    <TextBlock Text="{Binding Short}" FontWeight="Bold" Foreground="#5EC6FF" Margin="0,0,6,0"/>
                                     <TextBlock Text="{Binding Spell}" Margin="0,0,6,0"/>
                                     <TextBlock Text="x" Margin="0,0,4,0"/>
                                     <TextBlock Text="{Binding Heals}"/>
-                                </StackPanel>
+                                </DockPanel>
                             </DataTemplate>
                         </ListBox.ItemTemplate>
                     </ListBox>
-                    <ListBox Grid.Row="1" Grid.Column="1" ItemsSource="{Binding Shields}" Height="120"/>
-                    <ListBox Grid.Row="1" Grid.Column="2" ItemsSource="{Binding Inventory}" Height="120"/>
+                    <ListBox Grid.Row="1" Grid.Column="1" ItemsSource="{Binding Shields}" Height="140" Background="#202429" BorderBrush="#333"/>
+                    <ListBox Grid.Row="1" Grid.Column="2" ItemsSource="{Binding Inventory}" Height="140" Background="#202429" BorderBrush="#333"/>
                 </Grid>
 
                 <GroupBox Header="Spells" Margin="0,0,0,12">
-                    <DataGrid ItemsSource="{Binding Spells}" AutoGenerateColumns="False" CanUserAddRows="False" Height="200" Background="{StaticResource Brush.Panel}" Foreground="{StaticResource Brush.Text}" BorderBrush="{StaticResource Brush.Border}" RowBackground="{StaticResource Brush.Panel}" AlternatingRowBackground="#262626">
+                    <DataGrid ItemsSource="{Binding Spells}" AutoGenerateColumns="False" CanUserAddRows="False" CanUserDeleteRows="False" IsReadOnly="True" RowHeaderWidth="0" FontSize="12" HeadersVisibility="Column" Background="{StaticResource Brush.Panel}" Foreground="{StaticResource Brush.Text}" BorderBrush="{StaticResource Brush.Border}" RowBackground="#262626" AlternatingRowBackground="#303030" MinHeight="240" Height="Auto">
                         <DataGrid.Columns>
-                            <DataGridTextColumn Header="Nick" Binding="{Binding Nick}" Width="60"/>
+                            <DataGridTextColumn Header="Nick" Binding="{Binding Nick}" Width="80"/>
                             <DataGridTextColumn Header="Name" Binding="{Binding LongName}" Width="*"/>
-                            <DataGridTextColumn Header="Sphere" Binding="{Binding Sphere}" Width="80"/>
-                            <DataGridTextColumn Header="Mana" Binding="{Binding Mana}" Width="60"/>
-                            <DataGridTextColumn Header="Diff" Binding="{Binding Diff}" Width="60"/>
+                            <DataGridTextColumn Header="Sphere" Binding="{Binding Sphere}" Width="100"/>
+                            <DataGridTextColumn Header="Mana" Binding="{Binding Mana}" Width="70"/>
+                            <DataGridTextColumn Header="Diff" Binding="{Binding Diff}" Width="70"/>
                         </DataGrid.Columns>
                     </DataGrid>
                 </GroupBox>
 
                 <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,0,0,8">
-                    <Button Content="Close" Command="{Binding CloseCommand}" Width="90"/>
+                    <Button Content="Close" Command="{Binding CloseCommand}" Width="100"/>
                 </StackPanel>
             </StackPanel>
         </ScrollViewer>

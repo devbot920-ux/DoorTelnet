@@ -17,6 +17,12 @@ public class CharacterProfileStore
         public string Class { get; set; } = string.Empty; // e.g. cleric, mage
         public int Level { get; set; }
         public long Experience { get; set; }
+        // NEW meta fields
+        public string FirstName { get; set; } = string.Empty;
+        public string LastName { get; set; } = string.Empty;
+        public string Race { get; set; } = string.Empty;
+        public string Walk { get; set; } = string.Empty;
+        public long XpLeft { get; set; }
         public DateTime LastStatsUpdateUtc { get; set; }
         public Thresholds Thresholds { get; set; } = new();
         public FeatureFlags Features { get; set; } = new();
@@ -139,6 +145,32 @@ public class CharacterProfileStore
         }
     }
 
+    // NEW: Ensure character with full metadata (only if character does not already exist)
+    public void EnsureCharacterWithMeta(string username, string character, string firstName, string lastName, string race, string walk, string @class, int level, long experience, long xpLeft)
+    {
+        lock (_sync)
+        {
+            var user = _users.FirstOrDefault(u => u.Username.Equals(username, StringComparison.OrdinalIgnoreCase));
+            if (user == null) { user = new UserCharacters { Username = username }; _users.Add(user); }
+            if (user.Characters.Any(c => c.Name.Equals(character, StringComparison.OrdinalIgnoreCase))) return; // already exists
+            var rec = new CharacterRecord
+            {
+                Name = character,
+                FirstName = firstName ?? string.Empty,
+                LastName = lastName ?? string.Empty,
+                Race = race ?? string.Empty,
+                Walk = walk ?? string.Empty,
+                Class = @class ?? string.Empty,
+                Level = level,
+                Experience = experience,
+                XpLeft = xpLeft,
+                LastStatsUpdateUtc = DateTime.UtcNow
+            };
+            user.Characters.Add(rec);
+            Save();
+        }
+    }
+
     private void Load()
     {
         try
@@ -178,6 +210,16 @@ public class CharacterProfileStore
                 var house = m.Groups[3].Value.Trim();
                 yield return (idx, name, house);
             }
+        }
+    }
+
+    public void EnsureCharacter(string username, string character, string house)
+    {
+        lock (_sync)
+        {
+            var rec = GetOrCreateInternal(username, character, house);
+            // Do not alter LastCharacter here
+            Save();
         }
     }
 }

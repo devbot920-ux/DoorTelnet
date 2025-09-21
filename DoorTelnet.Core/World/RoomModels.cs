@@ -280,8 +280,8 @@ public class RoomTracker
         // First attempt to capture directional LOOK without letting remote room override current.
         if (TryParseLookCommand(user, character, screenText)) return true; // adjacency captured
 
-        // If we recently updated AND there are no new unprocessed lines for room detection, allow throttle; otherwise try again.
-        if ((DateTime.UtcNow - _lastRoomChange).TotalMilliseconds < 50)
+        // Reduce throttling to improve detection speed
+        if ((DateTime.UtcNow - _lastRoomChange).TotalMilliseconds < 25)
         {
             var unprocessedCount = _lineBuffer.GetUnprocessedLines(l => l.ProcessedForRoomDetection).Count();
             if (unprocessedCount == 0) return false;
@@ -324,8 +324,8 @@ public class RoomTracker
                 }
             }
 
-            // Lightweight timestamp refresh if nothing else but time elapsed
-            if (!anyUpdate && CurrentRoom != null && (DateTime.UtcNow - CurrentRoom.LastUpdated).TotalMilliseconds > 500)
+            // Reduce threshold for lightweight timestamp refresh to be more responsive
+            if (!anyUpdate && CurrentRoom != null && (DateTime.UtcNow - CurrentRoom.LastUpdated).TotalMilliseconds > 200)
             {
                 CurrentRoom.LastUpdated = DateTime.UtcNow;
                 try
@@ -341,6 +341,56 @@ public class RoomTracker
         }
 
         return anyUpdate;
+    }
+
+    /// <summary>
+    /// Update a monster's disposition in the current room
+    /// </summary>
+    /// <param name="monsterName">The name of the monster to update</param>
+    /// <param name="newDisposition">The new disposition (e.g., "aggressive", "neutral")</param>
+    /// <returns>True if the monster was found and updated</returns>
+    public bool UpdateMonsterDisposition(string monsterName, string newDisposition)
+    {
+        lock (_sync)
+        {
+            if (CurrentRoom?.Monsters == null || CurrentRoom.Monsters.Count == 0)
+                return false;
+
+            // Find the monster in the current room
+            var existingMonster = CurrentRoom.Monsters.FirstOrDefault(m => 
+                string.Equals(m.Name, monsterName, StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(m.Name?.Replace(" (summoned)", ""), monsterName, StringComparison.OrdinalIgnoreCase));
+
+            if (existingMonster != null && !existingMonster.Disposition.Equals(newDisposition, StringComparison.OrdinalIgnoreCase))
+            {
+                // Monster exists but has different disposition - update it
+                var updatedMonsters = CurrentRoom.Monsters.ToList();
+                updatedMonsters.Remove(existingMonster);
+                updatedMonsters.Add(new MonsterInfo(
+                    existingMonster.Name, 
+                    newDisposition, 
+                    existingMonster.TargetingYou, 
+                    existingMonster.Count));
+
+                CurrentRoom.Monsters.Clear();
+                CurrentRoom.Monsters.AddRange(updatedMonsters);
+                CurrentRoom.LastUpdated = DateTime.UtcNow;
+
+                // Fire room changed event
+                try
+                {
+                    RoomChanged?.Invoke(CurrentRoom);
+                }
+                catch
+                {
+                    // ignored
+                }
+
+                return true;
+            }
+
+            return false;
+        }
     }
 
     // Quick augmentation: If we have standalone monster lines ("X is here." or variants) not yet processed, add them.
@@ -368,31 +418,46 @@ public class RoomTracker
             var names = new List<string>();
             if (listPart.Contains(','))
             {
+                // Split by comma first
                 var commaParts = Regex.Split(listPart, @"\s*,\s*")
                     .Where(p => p.Length > 0)
                     .ToList();
 
                 if (commaParts.Count > 0)
                 {
-                    var lastIdx = commaParts.Count - 1;
-                    var last = commaParts[lastIdx];
-                    if (Regex.IsMatch(last, @"\s+and\s+", RegexOptions.IgnoreCase))
+                    // Process all parts except the last one normally
+                    for (int i = 0; i < commaParts.Count - 1; i++)
                     {
-                        var lastParts = Regex.Split(last, @"\s+and\s+", RegexOptions.IgnoreCase)
-                            .Where(p => p.Length > 0);
-                        commaParts.RemoveAt(lastIdx);
-                        commaParts.AddRange(lastParts);
+                        names.Add(commaParts[i].Trim());
                     }
-                    names.AddRange(commaParts);
+
+                    // Handle the last part, which might contain " and "
+                    var lastPart = commaParts[^1].Trim();
+                    if (Regex.IsMatch(lastPart, @"\s+and\s+", RegexOptions.IgnoreCase))
+                    {
+                        // Split "Y and Z" into separate parts
+                        var lastParts = Regex.Split(lastPart, @"\s+and\s+", RegexOptions.IgnoreCase)
+                            .Where(p => p.Length > 0)
+                            .Select(p => p.Trim());
+                        names.AddRange(lastParts);
+                    }
+                    else
+                    {
+                        // No " and " in the last part, add it as-is
+                        names.Add(lastPart);
+                    }
                 }
             }
             else if (Regex.IsMatch(listPart, @"\s+and\s+", RegexOptions.IgnoreCase))
             {
+                // No commas, just split by " and " (e.g., "X and Y")
                 names.AddRange(Regex.Split(listPart, @"\s+and\s+", RegexOptions.IgnoreCase)
-                    .Where(p => p.Length > 0));
+                    .Where(p => p.Length > 0)
+                    .Select(p => p.Trim()));
             }
             else
             {
+                // Single monster
                 names.Add(listPart);
             }
 
@@ -401,10 +466,9 @@ public class RoomTracker
                 var name = n.Trim();
                 if (name.Length == 0) continue;
 
-                if (!updated.Any(x => x.Name.Equals(name, StringComparison.OrdinalIgnoreCase)))
-                {
-                    updated.Add(new MonsterInfo(name, "neutral", false, null));
-                }
+                // Always add monsters, even if we already have one with the same name
+                // This allows for multiple monsters with the same name in a room
+                updated.Add(new MonsterInfo(name, "neutral", false, null));
             }
         }
 
@@ -482,6 +546,13 @@ public class RoomTracker
         var toAdd = new List<MonsterInfo>();
         var toRemove = new List<string>();
 
+        // Local helper to strip (summoned) for comparisons
+        static string StripSummonedSuffix(string name)
+        {
+            if (string.IsNullOrWhiteSpace(name)) return name;
+            return name.Replace(" (summoned)", "", StringComparison.OrdinalIgnoreCase);
+        }
+
         foreach (var bl in unprocessed)
         {
             var original = bl.Content;
@@ -492,11 +563,12 @@ public class RoomTracker
             if (mSummon.Success)
             {
                 var name = mSummon.Groups[1].Value.Trim();
-                if (!CurrentRoom.Monsters.Any(m => m.Name.Contains(name, StringComparison.OrdinalIgnoreCase)))
+                bool exists = CurrentRoom.Monsters.Any(m => m.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
+                if (!exists)
                 {
-                    toAdd.Add(new MonsterInfo($"{name}", "aggressive", false, null));
-                    continue;
+                    toAdd.Add(new MonsterInfo(name, "aggressive", false, null));
                 }
+                continue;
             }
 
             var mEnter = Regex.Match(line, @"^(?:A |An |The )?(.+?)\s+(enters|arrives)\s+(?:from\s+the\s+)?(.+?)\.?$", RegexOptions.IgnoreCase);
@@ -663,7 +735,8 @@ public class RoomTracker
                || c.Contains("summoned for combat")
                || c.Contains(" enters ")
                || c.Contains(" leaves ")
-               || c.Contains(" follows you");
+               || c.Contains(" follows you")
+               || Regex.IsMatch(c, @"^(?:.+?)\s+(?:is|are|stands|lurks|waits)\s+here\.?$", RegexOptions.IgnoreCase);
     }
 
     private static bool IsObviouslyNonRoomLine(string line)
@@ -1391,30 +1464,46 @@ public static class RoomParser
             var names = new List<string>();
             if (listPart.Contains(','))
             {
-                var commaParts = MonstersComma.Split(listPart)
+                // Split by comma first
+                var commaParts = Regex.Split(listPart, @"\s*,\s*")
                     .Where(p => p.Length > 0)
                     .ToList();
+
                 if (commaParts.Count > 0)
                 {
-                    var lastIdx = commaParts.Count - 1;
-                    var last = commaParts[lastIdx];
-                    if (MonstersSplitConjunction.IsMatch(last))
+                    // Process all parts except the last one normally
+                    for (int i = 0; i < commaParts.Count - 1; i++)
                     {
-                        var lastParts = MonstersSplitConjunction.Split(last)
-                            .Where(p => p.Length > 0);
-                        commaParts.RemoveAt(lastIdx);
-                        commaParts.AddRange(lastParts);
+                        names.Add(commaParts[i].Trim());
                     }
-                    names.AddRange(commaParts);
+
+                    // Handle the last part, which might contain " and "
+                    var lastPart = commaParts[^1].Trim();
+                    if (Regex.IsMatch(lastPart, @"\s+and\s+", RegexOptions.IgnoreCase))
+                    {
+                        // Split "Y and Z" into separate parts
+                        var lastParts = Regex.Split(lastPart, @"\s+and\s+", RegexOptions.IgnoreCase)
+                            .Where(p => p.Length > 0)
+                            .Select(p => p.Trim());
+                        names.AddRange(lastParts);
+                    }
+                    else
+                    {
+                        // No " and " in the last part, add it as-is
+                        names.Add(lastPart);
+                    }
                 }
             }
-            else if (MonstersSplitConjunction.IsMatch(listPart))
+            else if (Regex.IsMatch(listPart, @"\s+and\s+", RegexOptions.IgnoreCase))
             {
-                names.AddRange(MonstersSplitConjunction.Split(listPart)
-                    .Where(p => p.Length > 0));
+                // No commas, just split by " and " (e.g., "X and Y")
+                names.AddRange(Regex.Split(listPart, @"\s+and\s+", RegexOptions.IgnoreCase)
+                    .Where(p => p.Length > 0)
+                    .Select(p => p.Trim()));
             }
             else
             {
+                // Single monster
                 names.Add(listPart);
             }
 
@@ -1435,10 +1524,8 @@ public static class RoomParser
         var count = ParseCountPrefix(rawName);
         var disp = "neutral";
 
-        if (!list.Any(m => m.Name.Equals(norm, StringComparison.OrdinalIgnoreCase)))
-        {
-            list.Add(new MonsterInfo(norm, disp ?? "neutral", targeting, count));
-        }
+        // Always add the monster - multiple monsters with same name are allowed
+        list.Add(new MonsterInfo(norm, disp ?? "neutral", targeting, count));
     }
 
     private static string NormalizeEntity(string s)
@@ -1571,7 +1658,6 @@ public static class RoomParser
     }
 }
 
-// Restore room grid related DTOs if missing
 public class RoomGridData
 {
     public GridRoomInfo? West { get; set; }

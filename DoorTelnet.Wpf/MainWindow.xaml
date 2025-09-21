@@ -1,4 +1,5 @@
 ﻿<Window x:Class="DoorTelnet.Wpf.MainWindow"
+        x:Name="RootWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
@@ -8,12 +9,45 @@
         mc:Ignorable="d"
         Title="DoorTelnet" Height="650" Width="1150" MinWidth="900" MinHeight="550"
         Background="{StaticResource Brush.Background}">
+    <Window.Resources>
+        <CollectionViewSource x:Key="LogEntries" Source="{Binding LogVm.Entries, Source={x:Reference Name=RootWindow}}" />
+    </Window.Resources>
     <DockPanel>
-        <!-- Top bar with menu and connect button -->
+        <!-- Top bar with menu and connect button (stats panel removed) -->
         <Border DockPanel.Dock="Top" Background="{StaticResource Brush.Panel}" BorderBrush="{StaticResource Brush.Border}" BorderThickness="0,0,0,1" Padding="2" SnapsToDevicePixels="True">
             <DockPanel LastChildFill="True">
                 <StackPanel Orientation="Horizontal" DockPanel.Dock="Right" VerticalAlignment="Center" Margin="4,0,0,0">
-                    <ToggleButton Width="130" Margin="0,0,8,0" IsChecked="{Binding AutoGong, Mode=TwoWay}" Content="{Binding AutoGongButtonText}" Command="{Binding ToggleAutoGongCommand}">
+                    <Button x:Name="UserButton" Width="80" Margin="0,0,8,0" Content="{Binding CurrentUserButtonText}" MouseRightButtonUp="UserButton_MouseRightButtonUp" Click="UserButton_Click">
+                        <Button.ContextMenu>
+                            <ContextMenu ItemsSource="{Binding UserMenuItems}">
+                                <ContextMenu.ItemContainerStyle>
+                                    <Style TargetType="MenuItem">
+                                        <Setter Property="Header" Value="{Binding Name}"/>
+                                        <Setter Property="IsCheckable" Value="True"/>
+                                        <Setter Property="IsChecked" Value="{Binding IsSelected, Mode=TwoWay}"/>
+                                        <Setter Property="Command" Value="{Binding DataContext.SelectUserCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}"/>
+                                        <Setter Property="CommandParameter" Value="{Binding Name}"/>
+                                    </Style>
+                                </ContextMenu.ItemContainerStyle>
+                            </ContextMenu>
+                        </Button.ContextMenu>
+                        <Button.Style>
+                            <Style TargetType="Button">
+                                <Setter Property="Foreground" Value="{StaticResource Brush.Text}"/>
+                                <Setter Property="Background" Value="{StaticResource Brush.Panel}"/>
+                                <Setter Property="BorderBrush" Value="{StaticResource Brush.Border}"/>
+                                <Setter Property="BorderThickness" Value="1"/>
+                                <Setter Property="Padding" Value="6,3"/>
+                                <Setter Property="Cursor" Value="Hand"/>
+                                <Style.Triggers>
+                                    <Trigger Property="IsMouseOver" Value="True">
+                                        <Setter Property="Background" Value="{StaticResource Brush.AccentLight}"/>
+                                    </Trigger>
+                                </Style.Triggers>
+                            </Style>
+                        </Button.Style>
+                    </Button>
+                    <ToggleButton x:Name="AutoGongToggle" Width="130" Margin="0,0,8,0" IsChecked="{Binding AutoGong, Mode=TwoWay}" Content="{Binding AutoGongButtonText}" Click="AutoGongToggle_Click">
                         <ToggleButton.Style>
                             <Style TargetType="ToggleButton">
                                 <Setter Property="Foreground" Value="{StaticResource Brush.Text}"/>
@@ -31,7 +65,25 @@
                             </Style>
                         </ToggleButton.Style>
                     </ToggleButton>
-                    <Button Width="110" Content="{Binding ConnectButtonText}" Command="{Binding ToggleConnectionCommand}" />
+                    <ToggleButton x:Name="AutoAttackToggle" Width="130" Margin="0,0,8,0" IsChecked="{Binding AutoAttack, Mode=TwoWay}" Content="{Binding AutoAttackButtonText}" Click="AutoAttackToggle_Click">
+                        <ToggleButton.Style>
+                            <Style TargetType="ToggleButton">
+                                <Setter Property="Foreground" Value="{StaticResource Brush.Text}"/>
+                                <Setter Property="Background" Value="{StaticResource Brush.Panel}"/>
+                                <Setter Property="BorderBrush" Value="{StaticResource Brush.Border}"/>
+                                <Setter Property="BorderThickness" Value="1"/>
+                                <Setter Property="Padding" Value="6,3"/>
+                                <Setter Property="Cursor" Value="Hand"/>
+                                <Style.Triggers>
+                                    <Trigger Property="IsChecked" Value="True">
+                                        <Setter Property="Background" Value="{StaticResource Brush.Accent}"/>
+                                        <Setter Property="BorderBrush" Value="{StaticResource Brush.AccentLight}"/>
+                                    </Trigger>
+                                </Style.Triggers>
+                            </Style>
+                        </ToggleButton.Style>
+                    </ToggleButton>
+                    <Button x:Name="ConnectButton" Width="110" Content="{Binding ConnectButtonText}" Command="{Binding ToggleConnectionCommand}" Click="ConnectButton_Click" />
                 </StackPanel>
                 <Menu Background="{StaticResource Brush.Panel}" BorderThickness="0" ItemContainerStyle="{StaticResource DarkMenuItemStyle}">
                     <MenuItem Header="_File">
@@ -51,6 +103,8 @@
                         <MenuItem Header="Send Password" Command="{Binding SendPasswordCommand}" />
                         <MenuItem Header="Quick Login" Command="{Binding QuickLoginCommand}" />
                         <MenuItem Header="Send Initial Data" Command="{Binding SendInitialDataCommand}" />
+                        <Separator />
+                        <MenuItem Header="Hot Keys" Command="{Binding ShowHotKeysCommand}" />
                     </MenuItem>
                     <MenuItem Header="_Help">
                         <MenuItem Header="About" />
@@ -59,31 +113,40 @@
             </DockPanel>
         </Border>
 
-        <!-- Status bar bottom -->
-        <StatusBar DockPanel.Dock="Bottom">
-            <!-- Stats summary on far left -->
+        <!-- Status bar bottom expanded -->
+        <StatusBar DockPanel.Dock="Bottom" Padding="4,2">
             <StatusBarItem>
                 <TextBlock>
-                    <Run Text="HP:"/><Run Text="{Binding Stats.Hp, Mode=OneWay}"/><Run Text="/"/><Run Text="{Binding Stats.MaxHp, Mode=OneWay}"/>
-                    <Run Text="  MP:"/><Run Text="{Binding Stats.Mp, Mode=OneWay}"/>
-                    <Run Text="  MV:"/><Run Text="{Binding Stats.Mv, Mode=OneWay}"/>
-                    <Run Text="  AT:"/><Run Text="{Binding Stats.At, Mode=OneWay}"/>
-                    <Run Text="  AC:"/><Run Text="{Binding Stats.Ac, Mode=OneWay}"/>
-                    <Run Text="  "/><Run Text="{Binding Stats.State, Mode=OneWay}"/>
+                    <Run Text="HP:"/>
+                    <Run Text="{Binding Stats.Hp, Mode=OneWay}"/>
+                    <Run Text="/"/>
+                    <Run Text="{Binding Stats.MaxHp, Mode=OneWay}"/>
+                    <Run Text=" ("/>
+                    <Run Text="{Binding Stats.HpPercent, Mode=OneWay}"/>
+                    <Run Text="%)  MP:"/>
+                    <Run Text="{Binding Stats.Mp, Mode=OneWay}"/>
+                    <Run Text=" MV:"/>
+                    <Run Text="{Binding Stats.Mv, Mode=OneWay}"/>
                 </TextBlock>
             </StatusBarItem>
+            <Separator Style="{x:Null}" Width="10"/>
             <StatusBarItem>
-                <TextBlock Text="|" Margin="6,0" />
-            </StatusBarItem>
-            <StatusBarItem>
-                <TextBlock Text="DoorTelnet WPF" />
-            </StatusBarItem>
-            <StatusBarItem HorizontalAlignment="Right">
-                <TextBlock Text="{Binding ConnectionStatus}" />
+                <TextBlock>
+                    <Run Text="Char:"/>
+                    <Run Text="{Binding ProfileName}"/>
+                    <Run Text="  Items:"/><Run Text="{Binding InventoryCount}"/>
+                    <Run Text="  Spells:"/><Run Text="{Binding SpellsCount}"/>
+                    <Run Text="  Shielded:"/><Run Text="{Binding ShieldedStatus}"/>
+                    <Run Text="  Hunger:"/><Run Text="{Binding HungerStatus}"/>
+                    <Run Text="  Thirst:"/><Run Text="{Binding ThirstStatus}"/>
+                    <Run Text="  XP:"/><Run Text="{Binding Experience}"/>
+                    <Run Text="  XpLeft:"/><Run Text="{Binding XpLeft}"/>
+                    <Run Text="  Weapon:"/><Run Text="{Binding ArmedWith}"/>
+                </TextBlock>
             </StatusBarItem>
         </StatusBar>
 
-        <!-- Two-column main layout: Terminal (left) / Right column (panels + log) -->
+        <!-- Main layout -->
         <Grid Margin="6">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="7*" />
@@ -100,32 +163,27 @@
                     <DockPanel Grid.Row="0" LastChildFill="False" Margin="0,0,0,6">
                         <TextBlock Text="Terminal" FontWeight="Bold" />
                     </DockPanel>
-                    <controls:TerminalControl Grid.Row="1" />
+                    <controls:TerminalControl x:Name="Terminal" Grid.Row="1" Focusable="True" />
                 </Grid>
             </Border>
 
-            <!-- Right column with stacked info panels on top and log taking remaining space -->
+            <!-- Right column without separate stats panel now -->
             <Grid Grid.Column="1">
                 <Grid.RowDefinitions>
-                    <RowDefinition Height="Auto" />
                     <RowDefinition Height="Auto" />
                     <RowDefinition Height="Auto" />
                     <RowDefinition Height="*" />
                 </Grid.RowDefinitions>
 
                 <Border Style="{StaticResource PanelBorderStyle}" Margin="0,0,0,6" Grid.Row="0">
-                    <views:StatsView DataContext="{Binding Stats}" />
-                </Border>
-
-                <Border Style="{StaticResource PanelBorderStyle}" Margin="0,0,0,6" Grid.Row="1">
                     <views:RoomView DataContext="{Binding Room}" />
                 </Border>
 
-                <Border Style="{StaticResource PanelBorderStyle}" Margin="0,0,0,6" Grid.Row="2">
+                <Border Style="{StaticResource PanelBorderStyle}" Margin="0,0,0,6" Grid.Row="1">
                     <views:CombatView DataContext="{Binding Combat}" />
                 </Border>
 
-                <Border Style="{StaticResource PanelBorderStyle}" Grid.Row="3">
+                <Border Style="{StaticResource PanelBorderStyle}" Grid.Row="2">
                     <Grid>
                         <Grid.RowDefinitions>
                             <RowDefinition Height="Auto" />
@@ -134,10 +192,13 @@
                         <TextBlock Text="Session Log" FontWeight="Bold" />
                         <Border Grid.Row="1" Background="#202020" CornerRadius="2" BorderBrush="#333" BorderThickness="1" Margin="0,6,0,0">
                             <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
-                                <StackPanel Margin="4">
-                                    <TextBlock Text="Log Placeholder" Foreground="{StaticResource Brush.TextMuted}" />
-                                    <TextBlock Text="Real-time log entries will appear here." Foreground="{StaticResource Brush.TextMuted}" />
-                                </StackPanel>
+                                <ItemsControl ItemsSource="{Binding Source={StaticResource LogEntries}}">
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate>
+                                            <TextBlock Text="{Binding Display}" Foreground="{StaticResource Brush.Text}" FontFamily="Consolas" FontSize="12" TextWrapping="Wrap"/>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
                             </ScrollViewer>
                         </Border>
                     </Grid>
