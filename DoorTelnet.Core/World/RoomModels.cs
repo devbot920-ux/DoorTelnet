@@ -252,6 +252,8 @@ public class RoomTracker
         var fragCount = Regex.Matches(line, @"(p=\d+|Mp=\d+|Mv=\d+)", RegexOptions.IgnoreCase).Count;
         if (fragCount >= 3 && !line.Contains("[Hp=")) return string.Empty;
 
+        // Comprehensive ANSI escape code removal, including less common variants.
+        line = Regex.Replace(line, @"\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])", "");
         line = Regex.Replace(line, @"\x1B\[[0-9;]*[A-Za-z]", "");
         line = Regex.Replace(line, @"\[[0-9;]*m", "");
         line = Regex.Replace(line, @"\[[0-9]*[A-Za-z]", "");
@@ -277,26 +279,18 @@ public class RoomTracker
 
     public bool TryUpdateRoom(string user, string character, string screenText)
     {
-        if (TryParseLookCommand(user, character, screenText))
-        {
-            return true;
-        }
+        var handledLook = TryParseLookCommand(user, character, screenText); // don't return
+        bool anyUpdate = handledLook;
 
         if ((DateTime.UtcNow - _lastRoomChange).TotalMilliseconds < 25)
         {
             var unprocessedCount = _lineBuffer.GetUnprocessedLines(l => l.ProcessedForRoomDetection).Count();
-            if (unprocessedCount == 0) return false;
+            if (unprocessedCount == 0) return anyUpdate;
         }
-
-        bool anyUpdate = false;
 
         lock (_sync)
         {
-            if (TryHandleDynamicEvents(user, character))
-            {
-                anyUpdate = true;
-            }
-
+            if (TryHandleDynamicEvents(user, character)) anyUpdate = true;
             var roomState = ParseRoomFromBuffer();
             if (roomState == null)
             {
@@ -306,14 +300,12 @@ public class RoomTracker
             {
                 if (!roomState.Name.Contains("(looked)"))
                 {
-                    bool isNewRoom = CurrentRoom == null
-                        || CurrentRoom.Name != roomState.Name
-                        || !CurrentRoom.Exits.SequenceEqual(roomState.Exits);
-
-                    bool monstersChanged = !MonstersEqual(CurrentRoom?.Monsters, roomState.Monsters);
-
-                    bool itemsChanged = (CurrentRoom == null && roomState.Items.Count > 0)
-                        || (CurrentRoom != null && !CurrentRoom.Items.SequenceEqual(roomState.Items));
+                    var isNewRoom = CurrentRoom == null
+                                    || CurrentRoom.Name != roomState.Name
+                                    || !CurrentRoom.Exits.SequenceEqual(roomState.Exits);
+                    var monstersChanged = !MonstersEqual(CurrentRoom?.Monsters, roomState.Monsters);
+                    var itemsChanged = (CurrentRoom == null && roomState.Items.Count > 0)
+                                       || (CurrentRoom != null && !CurrentRoom.Items.SequenceEqual(roomState.Items));
 
                     if (isNewRoom || monstersChanged || itemsChanged)
                     {
@@ -327,19 +319,14 @@ public class RoomTracker
             if (!anyUpdate && CurrentRoom != null && (DateTime.UtcNow - CurrentRoom.LastUpdated).TotalMilliseconds > 200)
             {
                 CurrentRoom.LastUpdated = DateTime.UtcNow;
-                try
-                {
-                    RoomChanged?.Invoke(CurrentRoom);
-                }
-                catch
-                {
-                }
+                try { RoomChanged?.Invoke(CurrentRoom); } catch { }
                 anyUpdate = true;
             }
         }
 
         return anyUpdate;
     }
+
 
     public bool UpdateMonsterDisposition(string monsterName, string newDisposition)
     {
@@ -770,31 +757,48 @@ public class RoomTracker
         var lookPattern = new Regex(@"^(?:\[Hp=.*?\]\s*)?(?:look|l)\s+(north|south|east|west|northeast|northwest|southeast|southwest|up|down|n|s|e|w|ne|nw|se|sw|u|d)\s*$", RegexOptions.IgnoreCase);
         var movementPattern = new Regex(@"^(?:\[Hp=.*?\]\s*)?(n|s|e|w|ne|nw|se|sw|u|d)(?:\s|$)|^(?:\[Hp=.*?\]\s*)?(north|south|east|west|northeast|northwest|southeast|southwest|up|down)(?:\s|$)", RegexOptions.IgnoreCase);
 
+        // after you build `lines`:
+        int lookIdx = -1;
         string? dir = null;
-        foreach (var line in lines)
+
+        // find the LAST look echo
+        for (int i = lines.Count - 1; i >= 0; i--)
         {
-            var m = lookPattern.Match(line);
+            var m = lookPattern.Match(lines[i]);
             if (m.Success)
             {
                 dir = NormalizeDirection(m.Groups[1].Value);
+                lookIdx = i;
                 break;
             }
         }
         if (dir == null) return false;
 
-        int boundaryIndex = lines.FindIndex(l => l.IndexOf(LookBoundary, StringComparison.OrdinalIgnoreCase) >= 0);
+        // find the boundary nearest to/below that look (prefer the newest)
+        int boundaryIndex = -1;
+        for (int i = lines.Count - 1; i >= lookIdx; i--)
+        {
+            if (lines[i].IndexOf(LookBoundary, StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                boundaryIndex = i;
+                break;
+            }
+        }
         if (boundaryIndex < 0) return false;
 
+        // treat any movement AFTER the look echo (not just after boundary)
         int movementIdx = -1;
-        for (int i = boundaryIndex + 1; i < lines.Count; i++)
+        for (int i = Math.Max(lookIdx + 1, 0); i < lines.Count; i++)
         {
-            if (movementPattern.IsMatch(lines[i]) || lines[i].IndexOf("You have entered", StringComparison.OrdinalIgnoreCase) >= 0)
+            if (movementPattern.IsMatch(lines[i]) ||
+                lines[i].IndexOf("You have entered", StringComparison.OrdinalIgnoreCase) >= 0)
             {
                 movementIdx = i;
                 break;
             }
         }
 
+        // build remote segment between boundary and next thing (movement or end)
         var remoteLines = movementIdx > 0
             ? lines.Skip(boundaryIndex + 1).Take(movementIdx - (boundaryIndex + 1)).ToList()
             : lines.Skip(boundaryIndex + 1).ToList();
@@ -825,13 +829,23 @@ public class RoomTracker
             }
         }
 
+        // Only mark lines as processed that are clearly part of the look output
+        // Don't mark movement lines to avoid interfering with room detection
         try
         {
             var bufferLines = _lineBuffer.GetUnprocessedLines(l => l.ProcessedForRoomDetection).ToList();
             var toMark = bufferLines
-                .Where(b => b.Content.IndexOf(LookBoundary, StringComparison.OrdinalIgnoreCase) >= 0
-                            || remoteLines.Contains(b.Content))
+                .Where(b => remoteLines.Contains(b.Content) && !movementPattern.IsMatch(b.Content))
                 .ToList();
+
+            // Ensure the specific boundary line that was found is marked as processed.
+            var boundaryLineInScreenText = lines[boundaryIndex];
+            var boundaryLineInLookBuffer = bufferLines.FirstOrDefault(b => b.Content == boundaryLineInScreenText);
+            if (boundaryLineInLookBuffer != null && !toMark.Contains(boundaryLineInLookBuffer))
+            {
+                toMark.Add(boundaryLineInLookBuffer);
+            }
+
             if (toMark.Count > 0)
             {
                 _lineBuffer.MarkProcessed(toMark, l => l.ProcessedForRoomDetection = true);
@@ -839,6 +853,7 @@ public class RoomTracker
         }
         catch { }
 
+        // Return true if we didn't find a movement command after the look
         return movementIdx == -1;
     }
 
@@ -1032,7 +1047,7 @@ public class RoomTracker
                         grid.Northwest = info;
                         break;
                     case "southeast":
-                        grid.Southwest = info; // (retained original behavior)
+                        grid.Southeast = info;
                         break;
                     case "southwest":
                         grid.Southwest = info;
@@ -1141,17 +1156,14 @@ public static class RoomParser
             {
                 var name = ExtractRoomName(segment);
                 var exits = ExtractExits(segment);
-                if (!string.IsNullOrEmpty(name) || exits.Count > 0)
+                return new RoomState
                 {
-                    return new RoomState
-                    {
-                        Name = name ?? string.Empty,
-                        Exits = exits,
-                        Monsters = DetectMonsters(segment),
-                        Items = ExtractItems(segment),
-                        LastUpdated = DateTime.UtcNow
-                    };
-                }
+                    Name = name ?? string.Empty,
+                    Exits = exits,
+                    Monsters = DetectMonsters(segment),
+                    Items = ExtractItems(segment),
+                    LastUpdated = DateTime.UtcNow
+                };
             }
         }
 
@@ -1176,7 +1188,9 @@ public static class RoomParser
             {
                 var name = ExtractRoomName(between);
                 var exits = ExtractExits(between);
-                if (!string.IsNullOrEmpty(name) || exits.Count > 0)
+                // Only return if we have substantial room data, not just minimal indicators
+                if ((!string.IsNullOrEmpty(name) && exits.Count > 0) || 
+                    (exits.Count > 0 && (DetectMonsters(between).Count > 0 || ExtractItems(between).Count > 0)))
                 {
                     return new RoomState
                     {
@@ -1377,7 +1391,7 @@ public static class RoomParser
         {
             foreach (var part in raw.Split(" and ", StringSplitOptions.RemoveEmptyEntries))
             {
-                var dir = NormalizeDir(part.Trim().Replace(".", ""));
+                var dir = NormalizeDir(part.Trim().Replace(".", "").Trim());
                 if (dir != null) final.Add(dir);
             }
             return final.Distinct().ToList();
