@@ -4,21 +4,42 @@ using System.Windows.Controls;
 using System.Windows.Input;
 using DoorTelnet.Wpf.ViewModels;
 using Microsoft.Extensions.DependencyInjection;
+using System.Collections.Specialized;
 
 namespace DoorTelnet.Wpf;
 
 public partial class MainWindow : Window
 {
-    public LogViewModel? LogVm { get; set; }
+    public LogViewModel LogVm { get; set; }
+    
     public MainWindow()
     {
         InitializeComponent();
-        DataContext = App.Current is App app && app._host != null
-            ? app._host.Services.GetRequiredService<MainViewModel>()
-            : null;
+        
+        // Get the LogViewModel from DI
+        if (App.Current is App app && app._host != null)
+        {
+            DataContext = app._host.Services.GetRequiredService<MainViewModel>();
+            LogVm = app._host.Services.GetRequiredService<LogViewModel>();
+            
+            // Auto-scroll log to bottom when new entries are added
+            LogVm.Entries.CollectionChanged += LogEntries_CollectionChanged;
+        }
+        
         CommandBindings.Add(new CommandBinding(ApplicationCommands.Close, (_, _) => Close()));
         Activated += (_, _) => FocusTerminal();
         Loaded += (_, _) => FocusTerminal();
+    }
+
+    private void LogEntries_CollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
+    {
+        if (e.Action == NotifyCollectionChangedAction.Add)
+        {
+            Dispatcher.BeginInvoke(() => 
+            {
+                LogScrollViewer.ScrollToEnd();
+            }, System.Windows.Threading.DispatcherPriority.Background);
+        }
     }
 
     private void FocusTerminal()

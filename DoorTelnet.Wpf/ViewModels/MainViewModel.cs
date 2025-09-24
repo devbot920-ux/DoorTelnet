@@ -48,6 +48,10 @@ public partial class MainViewModel : ViewModelBase
 
     public ObservableCollection<MenuUserItem> UserMenuItems { get; } = new();
 
+    // Tooltip properties for automation features
+    public string AutoGongTooltip => "Auto Gong: Automatically rings the gong to summon monsters, attacks them, and loots gold/silver. Requires sufficient HP to operate safely.";
+    public string AutoAttackTooltip => "Auto Attack: Automatically attacks aggressive monsters in the current room. Works independently of Auto Gong.";
+
     public class MenuUserItem : INotifyPropertyChanged
     {
         public string Name { get; set; } = string.Empty;
@@ -108,6 +112,10 @@ public partial class MainViewModel : ViewModelBase
         Combat = combatViewModel;
         ConnectionStatus = "Disconnected";
 
+        // Test logging functionality
+        logger.LogInformation("MainViewModel initialized successfully");
+        logger.LogDebug("Profile features - AutoGong: {AutoGong}, AutoAttack: {AutoAttack}", profile.Features.AutoGong, profile.Features.AutoAttack);
+
         ConnectCommand = new AsyncRelayCommand(ConnectAsync, CanConnect);
         DisconnectCommand = new AsyncRelayCommand(DisconnectAsync, () => IsConnected);
         ToggleConnectionCommand = new AsyncRelayCommand(ToggleConnectionAsync, () => !IsBusy);
@@ -128,6 +136,11 @@ public partial class MainViewModel : ViewModelBase
 
         _profile.Updated += () => App.Current.Dispatcher.Invoke(RaiseProfileBar);
 
+        // Subscribe to stats changes to update auto-gong button status
+        _statsTracker.Updated += () => App.Current.Dispatcher.Invoke(() => {
+            OnPropertyChanged(nameof(AutoGongButtonText));
+        });
+
         _client.ConnectionFailed += msg =>
         {
             var disp = App.Current?.Dispatcher;
@@ -137,6 +150,7 @@ public partial class MainViewModel : ViewModelBase
                 {
                     ConnectionStatus = msg;
                     IsConnected = false;
+                    logger.LogWarning("Connection failed: {Message}", msg);
                     MessageBox.Show(msg, "Connection Error", MessageBoxButton.OK, MessageBoxImage.Warning);
                 });
             }
@@ -200,7 +214,31 @@ public partial class MainViewModel : ViewModelBase
     }
 
     public string ConnectButtonText => IsConnected ? "Disconnect" : "Connect";
-    public string AutoGongButtonText => AutoGong ? "Auto Gong: ON" : "Auto Gong: OFF";
+    
+    public string AutoGongButtonText 
+    { 
+        get 
+        {
+            if (!AutoGong) 
+                return "Auto Gong: OFF";
+            
+            // Check if HP is too low for gong operation
+            if (_statsTracker.MaxHp > 0)
+            {
+                var hpPercent = (int)Math.Round((double)_statsTracker.Hp / _statsTracker.MaxHp * 100);
+                var gongMinPercent = _profile.Thresholds.GongMinHpPercent;
+                var warningPercent = _profile.Thresholds.WarningHealHpPercent;
+                
+                if (hpPercent <= warningPercent && warningPercent > 0)
+                    return "Auto Gong: HEALING";
+                else if (hpPercent < gongMinPercent)
+                    return "Auto Gong: LOW HP";
+            }
+            
+            return "Auto Gong: ON";
+        } 
+    }
+    
     public string AutoAttackButtonText => AutoAttack ? "Auto Attack: ON" : "Auto Attack: OFF";
     public string CurrentUserButtonText => string.IsNullOrWhiteSpace(SelectedUser) ? "No User" : SelectedUser;
 

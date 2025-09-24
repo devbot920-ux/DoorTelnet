@@ -27,38 +27,50 @@
                 <GroupBox Header="Automation" Margin="0,0,0,12">
                     <StackPanel Margin="6" Orientation="Vertical">
                         <WrapPanel>
-                            <CheckBox Content="Auto Shield" IsChecked="{Binding AutoShield}" Margin="4"/>
-                            <CheckBox Content="Auto Heal" IsChecked="{Binding AutoHeal}" Margin="4"/>
-                            <CheckBox Content="Auto Gong" IsChecked="{Binding AutoGong}" Margin="4"/>
-                            <CheckBox Content="Auto Attack" IsChecked="{Binding AutoAttack}" Margin="4"/>
-                            <CheckBox Content="Pickup Gold" IsChecked="{Binding PickupGold}" Margin="4"/>
-                            <CheckBox Content="Pickup Silver" IsChecked="{Binding PickupSilver}" Margin="4"/>
+                            <CheckBox Content="Auto Shield" IsChecked="{Binding AutoShield}" Margin="4"
+                                      ToolTip="Automatically casts shield spells when shield effect expires"/>
+                            <CheckBox Content="Auto Heal" IsChecked="{Binding AutoHeal}" Margin="4"
+                                      ToolTip="Automatically casts healing spells when HP drops below configured threshold"/>
+                            <CheckBox Content="Auto Gong" IsChecked="{Binding AutoGong}" Margin="4"
+                                      ToolTip="Automatically rings the gong to summon monsters, attacks them, and loots gold/silver. Requires sufficient HP to operate safely"/>
+                            <CheckBox Content="Auto Attack" IsChecked="{Binding AutoAttack}" Margin="4"
+                                      ToolTip="Automatically attacks aggressive monsters in the current room. Works independently of Auto Gong"/>
+                            <CheckBox Content="Pickup Gold" IsChecked="{Binding PickupGold}" Margin="4"
+                                      ToolTip="Automatically picks up gold coins when they appear"/>
+                            <CheckBox Content="Pickup Silver" IsChecked="{Binding PickupSilver}" Margin="4"
+                                      ToolTip="Automatically picks up silver coins when they appear"/>
                         </WrapPanel>
                         <UniformGrid Columns="3" Margin="4,8,4,0">
                             <StackPanel Margin="4">
-                                <TextBlock Text="Shield Refresh (sec)" FontSize="11"/>
+                                <TextBlock Text="Shield Refresh (sec)" FontSize="11" 
+                                          ToolTip="Minimum time between shield casting attempts"/>
                                 <TextBox Text="{Binding ShieldRefreshSec, UpdateSourceTrigger=PropertyChanged}" Width="90" Style="{StaticResource SelectAllOnFocusTextBox}" PreviewTextInput="NumericOnly" />
                             </StackPanel>
                             <StackPanel Margin="4">
-                                <TextBlock Text="Gong HP %" FontSize="11"/>
+                                <TextBlock Text="Gong HP %" FontSize="11"
+                                          ToolTip="Minimum HP percentage required to continue gong automation cycle"/>
                                 <TextBox Text="{Binding GongMinHpPercent, UpdateSourceTrigger=PropertyChanged}" Width="90" Style="{StaticResource SelectAllOnFocusTextBox}" PreviewTextInput="NumericOnly" />
                             </StackPanel>
                             <StackPanel Margin="4">
-                                <TextBlock Text="Auto Heal HP %" FontSize="11"/>
+                                <TextBlock Text="Auto Heal HP %" FontSize="11"
+                                          ToolTip="HP percentage threshold for automatic healing"/>
                                 <TextBox Text="{Binding AutoHealHpPercent, UpdateSourceTrigger=PropertyChanged}" Width="90" Style="{StaticResource SelectAllOnFocusTextBox}" PreviewTextInput="NumericOnly" />
                             </StackPanel>
                         </UniformGrid>
                         <UniformGrid Columns="3" Margin="4,4,4,0">
                             <StackPanel Margin="4">
-                                <TextBlock Text="Warning Heal HP %" FontSize="11"/>
+                                <TextBlock Text="Warning Heal HP %" FontSize="11"
+                                          ToolTip="HP percentage that stops gong and waits for timers before healing"/>
                                 <TextBox Text="{Binding WarningHealHpPercent, UpdateSourceTrigger=PropertyChanged}" Width="90" Style="{StaticResource SelectAllOnFocusTextBox}" PreviewTextInput="NumericOnly" />
                             </StackPanel>
                             <StackPanel Margin="4">
-                                <TextBlock Text="Critical HP %" FontSize="11"/>
+                                <TextBlock Text="Critical HP %" FontSize="11"
+                                          ToolTip="Critical HP percentage for emergency actions"/>
                                 <TextBox Text="{Binding CriticalHpPercent, UpdateSourceTrigger=PropertyChanged}" Width="90" Style="{StaticResource SelectAllOnFocusTextBox}" PreviewTextInput="NumericOnly" />
                             </StackPanel>
                             <StackPanel Margin="4">
-                                <TextBlock Text="Critical Action" FontSize="11"/>
+                                <TextBlock Text="Critical Action" FontSize="11"
+                                          ToolTip="Action to take when critical HP is reached: stop, disconnect, or custom script"/>
                                 <ComboBox SelectedItem="{Binding CriticalAction}" Width="90">
                                     <ComboBoxItem Content="stop"/>
                                     <ComboBoxItem Content="disconnect"/>

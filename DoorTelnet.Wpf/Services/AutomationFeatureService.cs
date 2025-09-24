@@ -35,13 +35,10 @@ public class AutomationFeatureService : IDisposable
     private bool _waitingForTimers; // after kill & loot, wait for AT/AC reset
     private bool _waitingForHealTimers; // NEW: waiting for timers due to warning heal level
     private DateTime _lastGongAction = DateTime.MinValue; // last time we sent 'r g'
-    private string? _lastSummonedMobFirstLetter; // legacy (unused for multi-attack now)
-    private HashSet<char> _attackedLettersThisCycle = new();
-    private readonly HashSet<string> _attackedNamesThisCycle = new(StringComparer.OrdinalIgnoreCase); // NEW: track full names to avoid premature suppression
 
-    // AutoAttack independent state (separate from AutoGong)
-    private readonly HashSet<string> _autoAttackProcessedMonsters = new(StringComparer.OrdinalIgnoreCase);
-    private DateTime _lastAutoAttackReset = DateTime.MinValue;
+    // Unified attack tracking - used by both AutoGong and AutoAttack
+    private readonly HashSet<string> _attackedMonsters = new(StringComparer.OrdinalIgnoreCase);
+    private DateTime _lastAttackReset = DateTime.MinValue;
 
     private readonly Regex _coinRegex = new("(gold|silver) coin", RegexOptions.IgnoreCase | RegexOptions.Compiled);
     private readonly Regex _mobHereRegex = new(@"(?i)^(?:You see|A|An|The) +([A-Za-z][A-Za-z'\-]+) +(?:is here|stands here|lurks here)\.\s*$");
@@ -104,88 +101,96 @@ public class AutomationFeatureService : IDisposable
                 if (_profile.Effects.ThirstState != "not thirsty") { _profile.Effects.ThirstState = "not thirsty"; _profile.Effects.LastUpdated = DateTime.UtcNow; }
             }
 
-            // Opportunistic AutoAttack (independent of gong cycle) - simplified without timers
-            if (feats.AutoAttack)
+            // AutoAttack (independent of gong cycle) - attacks any aggressive monsters immediately
+            // This now shares the same attack tracking logic as AutoGong
+            if (feats.AutoAttack && !feats.AutoGong) // Only do independent AutoAttack if AutoGong is disabled
             {
-                var room = _room.CurrentRoom; // may be null if room not parsed yet
-                if (room != null)
-                {
-                    var aggressiveMobs = room.Monsters
-                                    .Where(m => m.Disposition.Equals("aggressive", StringComparison.OrdinalIgnoreCase))
-                                    .ToList();
-
-                    if (aggressiveMobs.Count > 0)
-                    {
-                        // Reset AutoAttack processed list every 30 seconds to allow re-attacking new spawns
-                        var now = DateTime.UtcNow;
-                        if ((now - _lastAutoAttackReset).TotalSeconds >= 30)
-                        {
-                            _autoAttackProcessedMonsters.Clear();
-                            _lastAutoAttackReset = now;
-                            _logger.LogTrace("AutoAttack reset processed monsters list");
-                        }
-
-                        // Check if there's a targeted monster that's still alive and aggressive
-                        var targetedMonster = _combat.GetTargetedMonster();
-                        MonsterInfo? next = null;
-                        
-                        if (targetedMonster != null)
-                        {
-                            // Try to find the targeted monster in the current room's aggressive monsters
-                            next = aggressiveMobs.FirstOrDefault(m => 
-                                string.Equals(m.Name?.Replace(" (summoned)", ""), targetedMonster.MonsterName, StringComparison.OrdinalIgnoreCase));
-                            
-                            if (next != null && !_autoAttackProcessedMonsters.Contains(next.Name))
-                            {
-                                _logger.LogTrace("Prioritizing targeted monster '{monster}' for AutoAttack", next.Name);
-                            }
-                            else if (next != null)
-                            {
-                                next = null; // Already processed this targeted monster
-                            }
-                        }
-                        
-                        // Fallback to normal selection if no targeted monster or targeted monster already processed
-                        if (next == null)
-                        {
-                            // Select first not yet processed by AutoAttack
-                            next = aggressiveMobs.FirstOrDefault(m => !_autoAttackProcessedMonsters.Contains(m.Name));
-                        }
-                        
-                        if (next != null)
-                        {
-                            var firstLetter = next.Name.TrimStart().FirstOrDefault(char.IsLetter);
-                            if (firstLetter != '\0')
-                            {
-                                var letterLower = char.ToLowerInvariant(firstLetter);
-                                _client.SendCommand($"a {letterLower}");
-                                _autoAttackProcessedMonsters.Add(next.Name);
-                                var targetStatus = targetedMonster != null && string.Equals(next.Name?.Replace(" (summoned)", ""), targetedMonster.MonsterName, StringComparison.OrdinalIgnoreCase) ? " [TARGETED]" : "";
-                                _logger.LogInformation("AutoAttack attacking mob '{mob}' (letter '{letter}'){targetStatus} (remaining targets: {count})", next.Name, letterLower, targetStatus, aggressiveMobs.Count(m => !_autoAttackProcessedMonsters.Contains(m.Name)));
-                            }
-                            else
-                            {
-                                // If name starts with non letter, try full name attack (some servers support this)
-                                _client.SendCommand($"a {next.Name.Split(' ').FirstOrDefault()}");
-                                _autoAttackProcessedMonsters.Add(next.Name);
-                                var targetStatus = targetedMonster != null && string.Equals(next.Name?.Replace(" (summoned)", ""), targetedMonster.MonsterName, StringComparison.OrdinalIgnoreCase) ? " [TARGETED]" : "";
-                                _logger.LogInformation("AutoAttack attacking mob '{mob}'{targetStatus} via name fallback (remaining targets: {count})", next.Name, targetStatus, aggressiveMobs.Count(m => !_autoAttackProcessedMonsters.Contains(m.Name)));
-                            }
-                        }
-                    }
-                    else
-                    {
-                        // No aggressive monsters - clear AutoAttack processed list for next wave
-                        if (_autoAttackProcessedMonsters.Count > 0)
-                        {
-                            _autoAttackProcessedMonsters.Clear();
-                            _logger.LogTrace("AutoAttack cleared processed monsters - no aggressive mobs remain");
-                        }
-                    }
-                }
+                AttackAggressiveMonsters("AutoAttack");
             }
         }
         catch { }
+    }
+
+    /// <summary>
+    /// Unified method to attack aggressive monsters, used by both AutoGong and AutoAttack
+    /// </summary>
+    private void AttackAggressiveMonsters(string context)
+    {
+        var room = _room.CurrentRoom;
+        if (room == null) return;
+
+        var aggressiveMobs = room.Monsters
+            .Where(m => m.Disposition.Equals("aggressive", StringComparison.OrdinalIgnoreCase))
+            .ToList();
+
+        if (aggressiveMobs.Count > 0)
+        {
+            // Reset attack tracking every 30 seconds to allow re-attacking new spawns
+            var now = DateTime.UtcNow;
+            if ((now - _lastAttackReset).TotalSeconds >= 30)
+            {
+                _attackedMonsters.Clear();
+                _lastAttackReset = now;
+                _logger.LogTrace("{context} reset attacked monsters list", context);
+            }
+
+            // Check if there's a targeted monster that's still alive and aggressive
+            var targetedMonster = _combat.GetTargetedMonster();
+            MonsterInfo? next = null;
+            
+            if (targetedMonster != null)
+            {
+                // Try to find the targeted monster in the current room's aggressive monsters
+                next = aggressiveMobs.FirstOrDefault(m => 
+                    string.Equals(m.Name?.Replace(" (summoned)", ""), targetedMonster.MonsterName, StringComparison.OrdinalIgnoreCase));
+                
+                if (next != null && !_attackedMonsters.Contains(next.Name))
+                {
+                    _logger.LogTrace("Prioritizing targeted monster '{monster}' for {context}", next.Name, context);
+                }
+                else if (next != null)
+                {
+                    next = null; // Already processed this targeted monster
+                }
+            }
+            
+            // Fallback to normal selection if no targeted monster or targeted monster already processed
+            if (next == null)
+            {
+                // Select first not yet attacked
+                next = aggressiveMobs.FirstOrDefault(m => !_attackedMonsters.Contains(m.Name));
+            }
+            
+            if (next != null)
+            {
+                var firstLetter = next.Name.TrimStart().FirstOrDefault(char.IsLetter);
+                if (firstLetter != '\0')
+                {
+                    var letterLower = char.ToLowerInvariant(firstLetter);
+                    _client.SendCommand($"a {letterLower}");
+                    _attackedMonsters.Add(next.Name);
+                    var targetStatus = targetedMonster != null && string.Equals(next.Name?.Replace(" (summoned)", ""), targetedMonster.MonsterName, StringComparison.OrdinalIgnoreCase) ? " [TARGETED]" : "";
+                    _logger.LogInformation("{context} attacking mob '{mob}' (letter '{letter}'){targetStatus} (remaining targets: {count})", context, next.Name, letterLower, targetStatus, aggressiveMobs.Count(m => !_attackedMonsters.Contains(m.Name)));
+                }
+                else
+                {
+                    // If name starts with non letter, try full name attack (some servers support this)
+                    _client.SendCommand($"a {next.Name.Split(' ').FirstOrDefault()}");
+                    _attackedMonsters.Add(next.Name);
+                    var targetStatus = targetedMonster != null && string.Equals(next.Name?.Replace(" (summoned)", ""), targetedMonster.MonsterName, StringComparison.OrdinalIgnoreCase) ? " [TARGETED]" : "";
+                    _logger.LogInformation("{context} attacking mob '{mob}'{targetStatus} via name fallback (remaining targets: {count})", context, next.Name, targetStatus, aggressiveMobs.Count(m => !_attackedMonsters.Contains(m.Name)));
+                }
+            }
+        }
+        else
+        {
+            // No aggressive monsters - clear attack tracking for next wave (but only in AutoAttack context)
+            if (context == "AutoAttack" && _attackedMonsters.Count > 0)
+            {
+                _attackedMonsters.Clear();
+                _logger.LogTrace("{context} cleared attacked monsters - no aggressive mobs remain", context);
+            }
+        }
     }
 
     private void EvaluateAutomation(bool immediate)
@@ -237,7 +242,7 @@ public class AutomationFeatureService : IDisposable
                 }
             }
 
-            // ---------- Auto Gong (full cycle mirroring CLI) ----------
+            // ---------- Auto Gong (full cycle with integrated attack logic) ----------
             if (feats.AutoGong)
             {
                 // On enable edge, reset state so we can begin fresh
@@ -246,9 +251,7 @@ public class AutomationFeatureService : IDisposable
                     _inGongCycle = false;
                     _waitingForTimers = false;
                     _waitingForHealTimers = false;
-                    _lastSummonedMobFirstLetter = null;
-                    _attackedLettersThisCycle.Clear();
-                    _attackedNamesThisCycle.Clear();
+                    _attackedMonsters.Clear(); // Clear the unified attack tracking
                 }
 
                 // Need valid stats & HP threshold
@@ -282,7 +285,8 @@ public class AutomationFeatureService : IDisposable
                     {
                         if (_inGongCycle || _waitingForTimers)
                         {
-                            _inGongCycle = false; _waitingForTimers = false; _lastSummonedMobFirstLetter = null;
+                            _inGongCycle = false; 
+                            _waitingForTimers = false;
                             _logger.LogDebug("AutoGong paused - HP {hp}% below threshold {thresh}%", hpPercent, th.GongMinHpPercent);
                         }
                     }
@@ -298,7 +302,7 @@ public class AutomationFeatureService : IDisposable
                             // Waiting for timers to reset after loot phase
                             if (!aggressivePresent && _waitingForTimers)
                             {
-                                if (timersReady )
+                                if (timersReady)
                                 {
                                     _waitingForTimers = false;
                                     _inGongCycle = false;
@@ -311,74 +315,25 @@ public class AutomationFeatureService : IDisposable
                                 if (timersReady && (now - _lastGongAction).TotalMilliseconds >= minGongIntervalMs)
                                 {
                                     _inGongCycle = true;
-                                    _attackedLettersThisCycle.Clear();
-                                    _attackedNamesThisCycle.Clear();
+                                    _attackedMonsters.Clear(); // Clear attack tracking for new gong cycle
                                     _lastGongAction = now;
                                     _client.SendCommand("r g");
                                     _logger.LogInformation("AutoGong rung gong (r g)");
                                 }
                             }
-                            else // active cycle
+                            else if (_inGongCycle && aggressivePresent) // active cycle with monsters to attack
                             {
-                                // Determine remaining aggressive monsters
-                                var aggressiveMobs = room.Monsters
-                                    .Where(m => m.Disposition.Equals("aggressive", StringComparison.OrdinalIgnoreCase))
-                                    .ToList();
-
-                                if (aggressiveMobs.Count > 0)
+                                // Use the unified attack logic
+                                AttackAggressiveMonsters("AutoGong");
+                            }
+                            else if (_inGongCycle && !aggressivePresent) // active cycle but no more monsters
+                            {
+                                if (!_waitingForTimers)
                                 {
-                                    // Check if there's a targeted monster that's still alive and aggressive
-                                    var targetedMonster = _combat.GetTargetedMonster();
-                                    MonsterInfo? next = null;
-                                   
-                                   if (targetedMonster != null)
-                                   {
-                                       // Try to find the targeted monster in the current room's aggressive monsters
-                                       next = aggressiveMobs.FirstOrDefault(m => 
-                                           string.Equals(m.Name?.Replace(" (summoned)", ""), targetedMonster.MonsterName, StringComparison.OrdinalIgnoreCase));
-                                       
-                                       if (next != null)
-                                       {
-                                           _logger.LogTrace("Prioritizing targeted monster '{monster}' for AutoGong", next.Name);
-                                       }
-                                   }
-                                   
-                                   // Fallback to normal selection if no targeted monster or targeted monster not found
-                                   if (next == null)
-                                   {
-                                       // Select first not yet attacked by name; fallback to first
-                                       next = aggressiveMobs.FirstOrDefault(m => !_attackedNamesThisCycle.Contains(m.Name))
-                                                  ?? aggressiveMobs.First();
-                                   }
-                                   
-                                   var firstLetter = next.Name.TrimStart().FirstOrDefault(char.IsLetter);
-                                   if (firstLetter != '\0')
-                                   {
-                                       var letterLower = char.ToLowerInvariant(firstLetter);
-                                       _client.SendCommand($"a {letterLower}");
-                                       _attackedLettersThisCycle.Add(letterLower);
-                                       _attackedNamesThisCycle.Add(next.Name);
-                                       var targetStatus = targetedMonster != null && string.Equals(next.Name?.Replace(" (summoned)", ""), targetedMonster.MonsterName, StringComparison.OrdinalIgnoreCase) ? " [TARGETED]" : "";
-                                       _logger.LogInformation("AutoGong attacking mob '{mob}' (letter '{letter}'){targetStatus} (remaining targets: {count})", next.Name, letterLower, targetStatus, aggressiveMobs.Count);
-                                     }
-                                   else
-                                   {
-                                       // If name starts with non letter, try full name attack (some servers support this)
-                                       _client.SendCommand($"a {next.Name.Split(' ').FirstOrDefault()}");
-                                       _attackedNamesThisCycle.Add(next.Name);
-                                       var targetStatus = targetedMonster != null && string.Equals(next.Name?.Replace(" (summoned)", ""), targetedMonster.MonsterName, StringComparison.OrdinalIgnoreCase) ? " [TARGETED]" : "";
-                                       _logger.LogInformation("AutoGong attacking mob '{mob}'{targetStatus} via name fallback (remaining targets: {count})", next.Name, targetStatus, aggressiveMobs.Count);
-                                   }
-                                }
-                                else
-                                {
-                                    if (!_waitingForTimers)
-                                    {
-                                        if (feats.PickupGold && room.Monsters.Count == 0) { _client.SendCommand("g gold"); _logger.LogTrace("AutoGong loot gold"); }
-                                        if (feats.PickupSilver) { _client.SendCommand("g sil"); _logger.LogTrace("AutoGong loot silver"); }
-                                        _waitingForTimers = true; // Wait for AT/AC reset before next cycle
-                                        _logger.LogDebug("AutoGong waiting for timers reset after clearing aggressive mobs");
-                                    }
+                                    if (feats.PickupGold && room.Monsters.Count == 0) { _client.SendCommand("g gold"); _logger.LogTrace("AutoGong loot gold"); }
+                                    if (feats.PickupSilver) { _client.SendCommand("g sil"); _logger.LogTrace("AutoGong loot silver"); }
+                                    _waitingForTimers = true; // Wait for AT/AC reset before next cycle
+                                    _logger.LogDebug("AutoGong waiting for timers reset after clearing aggressive mobs");
                                 }
                             }
                         }
@@ -553,16 +508,16 @@ public class AutomationFeatureService : IDisposable
 
     private void OnMonsterDeath(string deathMessage)
     {
-        // Extract monster names from death message and remove from AutoAttack processed list
-        // This allows AutoAttack to engage new monsters that spawn with the same name
+        // Extract monster names from death message and remove from attack tracking
+        // This allows attacking new monsters that spawn with the same name
         try
         {
             // Simple approach: clear the entire list when any monster dies
             // This ensures we can attack new spawns immediately
-            if (_autoAttackProcessedMonsters.Count > 0)
+            if (_attackedMonsters.Count > 0)
             {
-                _autoAttackProcessedMonsters.Clear();
-                _logger.LogTrace("AutoAttack cleared processed monsters due to monster death");
+                _attackedMonsters.Clear();
+                _logger.LogTrace("Cleared attacked monsters due to monster death");
             }
         }
         catch { }

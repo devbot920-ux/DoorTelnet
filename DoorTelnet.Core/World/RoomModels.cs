@@ -177,6 +177,9 @@ public class RoomTracker
     private const string LookBoundary = "You peer 1 room away"; // boundary marker for directional look
     private DateTime _lastLookParsed = DateTime.MinValue; // throttle duplicate look output handling
 
+    // Optional CombatTracker integration for unified death handling
+    public object? CombatTracker { get; set; }
+
     public RoomState? CurrentRoom { get; private set; }
 
     public event Action<RoomState>? RoomChanged; // New event for UI consumers
@@ -639,6 +642,20 @@ public class RoomTracker
                 {
                     toRemove.AddRange(matches);
                     System.Diagnostics.Debug.WriteLine($"?? DEATH LINE matched keywords; removing monsters: {string.Join(", ", matches)}");
+                    
+                    // Notify CombatTracker about the death if available (using reflection to avoid circular reference)
+                    try
+                    {
+                        if (CombatTracker != null)
+                        {
+                            var notifyMethod = CombatTracker.GetType().GetMethod("NotifyMonsterDeath");
+                            notifyMethod?.Invoke(CombatTracker, new object[] { matches, line });
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        System.Diagnostics.Debug.WriteLine($"?? COMBAT NOTIFICATION ERROR: {ex.Message}");
+                    }
                 }
             }
         }
@@ -1223,7 +1240,7 @@ public class RoomTracker
                         grid.Northwest = info;
                         break;
                     case "southeast":
-                        grid.Southeast = info;
+                        grid.Southwest = info;
                         break;
                     case "southwest":
                         grid.Southwest = info;
@@ -1588,259 +1605,144 @@ public static class RoomParser
         if (!raw.Contains(',') && !raw.Contains(" and "))
         {
             var dir = NormalizeDir(raw.Trim().Replace(".", ""));
-            if (dir != null) final.Add(dir);
-            return final;
-        }
-
-        if (raw.Contains(" and ") && !raw.Contains(','))
-        {
-            foreach (var part in raw.Split(" and ", StringSplitOptions.RemoveEmptyEntries))
+            if (!string.IsNullOrEmpty(dir))
             {
-                var dir = NormalizeDir(part.Trim().Replace(".", "").Trim());
-                if (dir != null) final.Add(dir);
+                final.Add(dir);
             }
-            return final.Distinct().ToList();
         }
-
-        var normalized = raw.Replace(", and ", ", ");
-        var parts = normalized.Split(',')
-            .Select(s => s.Trim())
-            .Where(s => s.Length > 0)
-            .ToList();
-
-        for (int i = 0; i < parts.Count; i++)
+        else
         {
-            var part = parts[i];
-            if (i == parts.Count - 1 && part.Contains(" and "))
+            var parts = Regex.Split(raw, @"\s*,\s*|and", RegexOptions.IgnoreCase)
+                .Select(p => p.Trim())
+                .Where(p => !string.IsNullOrEmpty(p))
+                .ToList();
+
+            foreach (var part in parts)
             {
-                foreach (var last in part.Split(" and ", StringSplitOptions.RemoveEmptyEntries))
+                var dir = NormalizeDir(part.Replace(".", ""));
+                if (!string.IsNullOrEmpty(dir))
                 {
-                    var dir = NormalizeDir(last.Trim().Replace(".", ""));
-                    if (dir != null) final.Add(dir);
+                    final.Add(dir);
                 }
             }
-            else
-            {
-                var dir = NormalizeDir(part);
-                if (dir != null) final.Add(dir);
-            }
         }
 
-        return final.Distinct().ToList();
+        return final;
     }
 
     private static List<MonsterInfo> DetectMonsters(string block)
     {
-        var result = new List<MonsterInfo>();
-
-        foreach (var raw in block.Split('\n'))
-        {
-            var line = raw.Trim();
-            if (line.Length == 0) continue;
-            if (line.IndexOf(" lay here", StringComparison.OrdinalIgnoreCase) >= 0) continue;
-            if (line.IndexOf(" lays here", StringComparison.OrdinalIgnoreCase) >= 0) continue;
-
-
-            var m = MonsterLine.Match(line);
-            if (!m.Success)
-            {
-                var single = Regex.Match(line, @"^(?:A |An |The )?(.+?)\s+is\s+here\.?$", RegexOptions.IgnoreCase);
-                if (single.Success)
-                {
-                    var nameS = single.Groups[1].Value.Trim();
-                    AddMonster(result, nameS, line, false);
-                }
-                continue;
-            }
-
-            var listPart = m.Groups["list"].Value.Trim();
-            if (listPart.Length == 0) continue;
-
-            var names = new List<string>();
-            if (listPart.Contains(','))
-            {
-                var commaParts = Regex.Split(listPart, @"\s*,\s*")
-                    .Where(p => p.Length > 0)
-                    .ToList();
-
-                if (commaParts.Count > 0)
-                {
-                    for (int i = 0; i < commaParts.Count - 1; i++)
-                    {
-                        names.Add(commaParts[i].Trim());
-                    }
-
-                    var lastPart = commaParts[^1].Trim();
-                    if (Regex.IsMatch(lastPart, @"\s+and\s+", RegexOptions.IgnoreCase))
-                    {
-                        var lastParts = Regex.Split(lastPart, @"\s+and\s+", RegexOptions.IgnoreCase)
-                            .Where(p => p.Length > 0)
-                            .Select(p => p.Trim());
-                        names.AddRange(lastParts);
-                    }
-                    else
-                    {
-                        names.Add(lastPart);
-                    }
-                }
-            }
-            else if (Regex.IsMatch(listPart, @"\s+and\s+", RegexOptions.IgnoreCase))
-            {
-                names.AddRange(Regex.Split(listPart, @"\s+and\s+", RegexOptions.IgnoreCase)
-                    .Where(p => p.Length > 0)
-                    .Select(p => p.Trim()));
-            }
-            else
-            {
-                names.Add(listPart);
-            }
-
-            foreach (var n in names)
-            {
-                var name = n.Trim();
-                if (name.Length == 0) continue;
-                AddMonster(result, name, line, false);
-            }
-        }
-
-        return result;
-    }
-
-    private static void AddMonster(List<MonsterInfo> list, string rawName, string sourceLine, bool targeting)
-    {
-        var norm = NormalizeEntity(rawName);
-        var count = ParseCountPrefix(rawName);
-        var disp = "neutral";
-        list.Add(new MonsterInfo(norm, disp ?? "neutral", targeting, count));
-    }
-
-    private static string NormalizeEntity(string s)
-    {
-        if (string.IsNullOrEmpty(s)) return "unknown";
-        var trimmed = s.Trim();
-        return trimmed.Length == 0 ? "unknown" : trimmed;
-    }
-
-    private static int? ParseCountPrefix(string s)
-    {
-        var first = s.Split(' ', StringSplitOptions.RemoveEmptyEntries).FirstOrDefault();
-        if (first == null) return null;
-
-        var map = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase)
-        {
-            { "one", 1 },
-            { "two", 2 },
-            { "three", 3 },
-            { "four", 4 },
-            { "five", 5 }
-        };
-
-        if (map.TryGetValue(first, out var v)) return v;
-        if (int.TryParse(first, out var iv)) return iv;
-        return null;
-    }
-
-    private static List<string> ExtractItems(string block)
-    {
-        var items = new List<string>();
-        foreach (Match m in LayHere.Matches(block))
-        {
-            var list = m.Groups[1].Value.Trim();
-            items.AddRange(SplitItems(list));
-        }
-
         var lines = block
             .Split('\n')
             .Select(l => l.Trim())
             .Where(l => l.Length > 0)
             .ToList();
 
-        int exitIdx = lines.FindIndex(l => ExitsLine.IsMatch(l));
-        if (exitIdx > 0)
+        var monsters = new List<MonsterInfo>();
+
+        foreach (var line in lines)
         {
-            var prev = lines[exitIdx - 1];
-            if (prev.Contains(" lay here") || prev.Contains("lays here"))
+            if (MonsterLine.IsMatch(line))
             {
-                var part = Regex.Replace(prev, @"\s+(lay|lays)\s+here\.?(\s+|$)", "", RegexOptions.IgnoreCase)
-                    .Trim();
-                if (part.Length > 0)
+                var listPart = Regex.Replace(line, @"\s+(?:is|are)\s+here\.?$", string.Empty, RegexOptions.IgnoreCase).Trim();
+                if (listPart.Length == 0) continue;
+
+                var names = new List<string>();
+                if (listPart.Contains(','))
                 {
-                    items.AddRange(SplitItems(part));
+                    var commaParts = Regex.Split(listPart, @"\s*,\s*")
+                        .Where(p => p.Length > 0)
+                        .ToList();
+
+                    if (commaParts.Count > 0)
+                    {
+                        for (int i = 0; i < commaParts.Count - 1; i++)
+                        {
+                            names.Add(commaParts[i].Trim());
+                        }
+
+                        var lastPart = commaParts[^1].Trim();
+                        if (Regex.IsMatch(lastPart, @"\s+and\s+", RegexOptions.IgnoreCase))
+                        {
+                            var lastParts = Regex.Split(lastPart, @"\s+and\s+", RegexOptions.IgnoreCase)
+                                .Where(p => p.Length > 0)
+                                .Select(p => p.Trim());
+                            names.AddRange(lastParts);
+                        }
+                        else
+                        {
+                            names.Add(lastPart);
+                        }
+                    }
+                }
+                else if (Regex.IsMatch(listPart, @"\s+and\s+", RegexOptions.IgnoreCase))
+                {
+                    names.AddRange(Regex.Split(listPart, @"\s+and\s+", RegexOptions.IgnoreCase)
+                        .Where(p => p.Length > 0)
+                        .Select(p => p.Trim()));
+                }
+                else
+                {
+                    names.Add(listPart);
+                }
+
+                foreach (var n in names)
+                {
+                    var name = n.Trim();
+                    if (name.Length == 0) continue;
+
+                    monsters.Add(new MonsterInfo(name, "neutral", false, null));
                 }
             }
         }
 
-        return items
-            .Select(NormalizeItem)
-            .Distinct()
-            .ToList();
+        return monsters;
     }
-
-    private static IEnumerable<string> SplitItems(string list)
-    {
-        var parts = Regex.Split(list, @",\s*|\s+and\s+", RegexOptions.IgnoreCase);
-        foreach (var p in parts)
-        {
-            var t = p.Trim();
-            if (t.Length > 0)
-            {
-                yield return t;
-            }
-        }
-    }
-
-    private static string NormalizeItem(string s) => Regex.Replace(s, "^(?i)(a|an|the) ", "").Trim();
-
     public static bool IsStatsLine(string line) => StatsLine.IsMatch(line);
 
-    public static string DebugParse(string text)
+    private static List<string> ExtractItems(string block)
     {
-        var cleaned = Clean(text);
-        var sb = new StringBuilder();
-        sb.AppendLine("=== ROOM PARSER DEBUG ===");
-
-        var lines = cleaned
+        var lines = block
             .Split('\n')
             .Select(l => l.Trim())
             .Where(l => l.Length > 0)
             .ToList();
 
-        string boundary = "You peer 1 room away";
-        int p = lines.FindIndex(l => l.Contains(boundary));
-        if (p >= 0)
+        var items = new List<string>();
+
+        foreach (var line in lines)
         {
-            sb.AppendLine($"Boundary at {p}: {lines[p]}");
+            if (line.IndexOf(" lay here", StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                var item = line.Substring(0, line.IndexOf(" lay here", StringComparison.OrdinalIgnoreCase)).Trim();
+                if (!string.IsNullOrWhiteSpace(item) && !items.Contains(item))
+                {
+                    items.Add(item);
+                }
+            }
+            else if (line.IndexOf(" lays here", StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                var item = line.Substring(0, line.IndexOf(" lays here", StringComparison.OrdinalIgnoreCase)).Trim();
+                if (!string.IsNullOrWhiteSpace(item) && !items.Contains(item))
+                {
+                    items.Add(item);
+                }
+            }
+            else if (LayHere.IsMatch(line))
+            {
+                var match = LayHere.Match(line);
+                if (match.Groups.Count > 1)
+                {
+                    var item = match.Groups[1].Value.Trim();
+                    if (!string.IsNullOrWhiteSpace(item) && !items.Contains(item))
+                    {
+                        items.Add(item);
+                    }
+                }
+            }
         }
 
-        var stats = lines.Where(l => StatsLine.IsMatch(l)).ToList();
-        sb.AppendLine($"Stats lines: {stats.Count}");
-        foreach (var l in stats)
-        {
-            sb.AppendLine($"  > {l}");
-        }
-
-        var enhanced = ParseBetweenStatsLines(cleaned);
-        if (enhanced != null)
-        {
-            sb.AppendLine("--- PARSE SUCCESS ---");
-            sb.AppendLine($"Name: {enhanced.Name}");
-            sb.AppendLine($"Exits: {string.Join(", ", enhanced.Exits)}");
-            sb.AppendLine($"Monsters: {enhanced.Monsters.Count}");
-            sb.AppendLine($"Items: {enhanced.Items.Count}");
-        }
-        else
-        {
-            sb.AppendLine("--- PARSE FAILED ---");
-            var block = ExtractRoomBlock(cleaned);
-            var name = ExtractRoomName(block);
-            var exits = ExtractExits(block);
-            sb.AppendLine($"Block: {block.Replace('\n', '|')}");
-            sb.AppendLine($"Name: {name}");
-            sb.AppendLine($"Exits: {string.Join(", ", exits)}");
-        }
-
-        sb.AppendLine("========================");
-        return sb.ToString();
+        return items;
     }
 }
 

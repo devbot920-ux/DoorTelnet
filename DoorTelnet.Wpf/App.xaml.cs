@@ -39,12 +39,13 @@ public partial class App : Application
                 lb.ClearProviders();
                 lb.AddDebug();
                 lb.AddConsole();
+                lb.SetMinimumLevel(LogLevel.Trace); // Set minimum log level to capture all logs
             })
             .ConfigureServices((ctx, services) =>
             {
                 var config = ctx.Configuration;
                 services.AddSingleton<IConfiguration>(config);
-                // logging provider registration
+                // logging provider registration - moved higher in priority
                 services.AddSingleton<LogBuffer>(_ => new LogBuffer(500));
                 services.AddSingleton<WpfLogProvider>();
                 services.AddSingleton<LogViewModel>();
@@ -57,7 +58,16 @@ public partial class App : Application
                 services.AddSingleton<ScriptEngine>();
                 services.AddSingleton<StatsTracker>();
                 services.AddSingleton<RoomTracker>();
-                services.AddSingleton<CombatTracker>();
+                services.AddSingleton<CombatTracker>(sp =>
+                {
+                    var roomTracker = sp.GetRequiredService<RoomTracker>();
+                    var combatTracker = new CombatTracker(roomTracker);
+                    
+                    // Set up bi-directional connection for unified death handling
+                    roomTracker.CombatTracker = combatTracker;
+                    
+                    return combatTracker;
+                });
                 services.AddSingleton<PlayerProfile>();
                 services.AddSingleton<ISettingsService, SettingsService>();
                 services.AddSingleton(sp => new CredentialStore(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "DoorTelnet", "credentials.json")));
@@ -364,12 +374,13 @@ public partial class App : Application
 
                 services.AddSingleton<MainWindow>(sp =>
                 {
-                    _ = sp.GetRequiredService<AutomationFeatureService>();
-                    
-                    // Add WPF log provider to logging after DI container is built
+                    // Register WPF log provider with the logger factory first
                     var loggerFactory = sp.GetRequiredService<ILoggerFactory>();
                     var wpfLogProvider = sp.GetRequiredService<WpfLogProvider>();
                     loggerFactory.AddProvider(wpfLogProvider);
+                    
+                    // Create AutomationFeatureService which will start generating log entries
+                    _ = sp.GetRequiredService<AutomationFeatureService>();
                     
                     var w = new MainWindow { DataContext = sp.GetRequiredService<MainViewModel>(), LogVm = sp.GetRequiredService<LogViewModel>() };
                     var settings = sp.GetRequiredService<ISettingsService>();
@@ -378,6 +389,13 @@ public partial class App : Application
                     {
                         w.Width = ui.Width; w.Height = ui.Height;
                     }
+                    
+                    // Test logging immediately to verify it works
+                    var testLogger = sp.GetRequiredService<ILogger<MainWindow>>();
+                    testLogger.LogInformation("DoorTelnet application started successfully");
+                    testLogger.LogDebug("Debug logging is working");
+                    testLogger.LogTrace("Trace logging is working");
+                    
                     return w;
                 });
             })

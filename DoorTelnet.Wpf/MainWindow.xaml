@@ -9,9 +9,6 @@
         mc:Ignorable="d"
         Title="DoorTelnet" Height="650" Width="1150" MinWidth="900" MinHeight="550"
         Background="{StaticResource Brush.Background}">
-    <Window.Resources>
-        <CollectionViewSource x:Key="LogEntries" Source="{Binding LogVm.Entries, Source={x:Reference Name=RootWindow}}" />
-    </Window.Resources>
     <DockPanel>
         <!-- Top bar with menu and connect button (stats panel removed) -->
         <Border DockPanel.Dock="Top" Background="{StaticResource Brush.Panel}" BorderBrush="{StaticResource Brush.Border}" BorderThickness="0,0,0,1" Padding="2" SnapsToDevicePixels="True">
@@ -47,7 +44,8 @@
                             </Style>
                         </Button.Style>
                     </Button>
-                    <ToggleButton x:Name="AutoGongToggle" Width="130" Margin="0,0,8,0" IsChecked="{Binding AutoGong, Mode=TwoWay}" Content="{Binding AutoGongButtonText}" Click="AutoGongToggle_Click">
+                    <ToggleButton x:Name="AutoGongToggle" Width="130" Margin="0,0,8,0" IsChecked="{Binding AutoGong, Mode=TwoWay}" Content="{Binding AutoGongButtonText}" Click="AutoGongToggle_Click"
+                                  ToolTip="{Binding AutoGongTooltip}">
                         <ToggleButton.Style>
                             <Style TargetType="ToggleButton">
                                 <Setter Property="Foreground" Value="{StaticResource Brush.Text}"/>
@@ -65,7 +63,8 @@
                             </Style>
                         </ToggleButton.Style>
                     </ToggleButton>
-                    <ToggleButton x:Name="AutoAttackToggle" Width="130" Margin="0,0,8,0" IsChecked="{Binding AutoAttack, Mode=TwoWay}" Content="{Binding AutoAttackButtonText}" Click="AutoAttackToggle_Click">
+                    <ToggleButton x:Name="AutoAttackToggle" Width="130" Margin="0,0,8,0" IsChecked="{Binding AutoAttack, Mode=TwoWay}" Content="{Binding AutoAttackButtonText}" Click="AutoAttackToggle_Click"
+                                  ToolTip="{Binding AutoAttackTooltip}">
                         <ToggleButton.Style>
                             <Style TargetType="ToggleButton">
                                 <Setter Property="Foreground" Value="{StaticResource Brush.Text}"/>
@@ -191,11 +190,11 @@
                         </Grid.RowDefinitions>
                         <TextBlock Text="Session Log" FontWeight="Bold" />
                         <Border Grid.Row="1" Background="#202020" CornerRadius="2" BorderBrush="#333" BorderThickness="1" Margin="0,6,0,0">
-                            <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
-                                <ItemsControl ItemsSource="{Binding Source={StaticResource LogEntries}}">
+                            <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Name="LogScrollViewer">
+                                <ItemsControl ItemsSource="{Binding LogVm.Entries}" Name="LogItemsControl">
                                     <ItemsControl.ItemTemplate>
                                         <DataTemplate>
-                                            <TextBlock Text="{Binding Display}" Foreground="{StaticResource Brush.Text}" FontFamily="Consolas" FontSize="12" TextWrapping="Wrap"/>
+                                            <TextBlock Text="{Binding Display}" Foreground="{StaticResource Brush.Text}" FontFamily="Consolas" FontSize="12" TextWrapping="Wrap" Margin="2,1"/>
                                         </DataTemplate>
                                     </ItemsControl.ItemTemplate>
                                 </ItemsControl>
