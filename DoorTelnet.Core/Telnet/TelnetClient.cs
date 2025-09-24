@@ -6,6 +6,7 @@ using System.Collections.Concurrent;
 using System.Net.Sockets;
 using System.Runtime.InteropServices;
 using System.Text;
+using System.Text.RegularExpressions;
 using Microsoft.Extensions.Logging;
 
 namespace DoorTelnet.Core.Telnet;
@@ -36,6 +37,10 @@ public class TelnetClient
     private DateTime _lastNawsSent = DateTime.MinValue;
 
     private readonly StringBuilder _currentLine = new();
+    
+    // ANSI sequence state for line processing
+    private bool _inAnsiSequenceForLine = false;
+    
     public event Action<string>? LineReceived;
     public event Action<string>? ConnectionFailed;
 
@@ -350,12 +355,15 @@ public class TelnetClient
 
         if (_diagnostics)
         {
-            // Enhanced diagnostics - look for ANSI sequences
-            var payloadStr = Encoding.ASCII.GetString(payload.ToArray());
-            var ansiCount = payloadStr.Count(c => c == '\x1B');
-            if (ansiCount > 0)
+            // Enhanced diagnostics - analyze payload content
+            var ansiCount = payload.Count(b => b == 0x1B);
+            var printableCount = payload.Count(b => b >= 32 && b < 127);
+            var controlCount = payload.Count(b => b < 32 && b != 0x1B);
+            
+            if (ansiCount > 0 || payload.Count < 50)
             {
-                Diag($"Payload contains {ansiCount} ANSI escape sequences");
+                var payloadPreview = GetPayloadPreview(payload);
+                Diag($"Payload[{payload.Count}]: {printableCount} printable, {ansiCount} ESC, {controlCount} control - Preview: {payloadPreview}");
             }
         }
 
@@ -425,14 +433,56 @@ public class TelnetClient
         }
     }
 
+    private string GetPayloadPreview(List<byte> payload)
+    {
+        var sb = new StringBuilder();
+        for (int i = 0; i < Math.Min(payload.Count, 50); i++)
+        {
+            var b = payload[i];
+            if (b == 0x1B)
+            {
+                sb.Append("\\ESC");
+            }
+            else if (b >= 32 && b < 127)
+            {
+                sb.Append((char)b);
+            }
+            else if (b == '\n')
+            {
+                sb.Append("\\n");
+            }
+            else if (b == '\r')
+            {
+                sb.Append("\\r");
+            }
+            else if (b == '\t')
+            {
+                sb.Append("\\t");
+            }
+            else
+            {
+                sb.Append($"[{b:X2}]");
+            }
+        }
+        if (payload.Count > 50)
+        {
+            sb.Append("...");
+        }
+        return sb.ToString();
+    }
+
     /// <summary>
-    /// Process payload bytes for line building, properly stripping ANSI escape sequences
+    /// Process payload bytes for line building, letting AnsiParser handle all ANSI sequences
+    /// 
+    /// NOTE: Currently skips all ANSI sequences to provide clean text for existing parsers.
+    /// Future enhancement: Could process ANSI sequences to extract color information for
+    /// enhanced parsing (e.g., red text = monsters/combat, green text = items, etc.)
     /// </summary>
     private void ProcessLinesFromPayload(List<byte> payload)
     {
-        bool inAnsiSequence = false;
-        var ansiBuffer = new List<byte>();
-
+        // Let the AnsiParser handle all ANSI sequences properly with state management
+        // We just build lines for LineReceived event - no ANSI processing here
+        
         foreach (var ch in CollectionsMarshal.AsSpan(payload))
         {
             if (ch >= 32 && ch < 127)
@@ -442,38 +492,32 @@ public class TelnetClient
 
             char c = (char)ch;
 
-            // Handle ANSI escape sequences
-            if (c == '\x1B') // ESC character
+            // Handle ANSI escape sequence state across payloads
+            if (c == '\x1B')
             {
-                inAnsiSequence = true;
-                ansiBuffer.Clear();
+                // Start of ANSI escape sequence
+                _inAnsiSequenceForLine = true;
+                if (_diagnostics)
+                {
+                    Diag($"Started ANSI sequence in line processing");
+                }
                 continue;
             }
 
-            if (inAnsiSequence)
+            if (_inAnsiSequenceForLine)
             {
-                ansiBuffer.Add(ch);
-
-                // ANSI sequence typically ends with a letter (A-Z, a-z) or certain symbols
-                // Common endings: m (SGR), A-D (cursor movement), H (cursor position), etc.
+                // We're inside an ANSI sequence - skip all characters until sequence ends
+                // ANSI sequences typically end with a letter (A-Z, a-z) or certain symbols
                 if ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || c == '@')
                 {
-                    // End of ANSI sequence - don't add anything to the line
-                    inAnsiSequence = false;
-                    ansiBuffer.Clear();
-
-                    if (_diagnostics && ansiBuffer.Count > 0)
+                    // End of ANSI sequence
+                    _inAnsiSequenceForLine = false;
+                    if (_diagnostics)
                     {
-                        var ansiSeq = string.Join("", ansiBuffer.Select(b => (char)b));
-                        Diag($"Stripped ANSI sequence: ESC{ansiSeq}");
+                        Diag($"Ended ANSI sequence in line processing with: {c}");
                     }
                 }
-                // If the sequence gets too long, abandon it (probably not a real ANSI sequence)
-                else if (ansiBuffer.Count > 20)
-                {
-                    inAnsiSequence = false;
-                    ansiBuffer.Clear();
-                }
+                // Skip this character - it's part of the ANSI sequence
                 continue;
             }
 
@@ -482,20 +526,98 @@ public class TelnetClient
             {
                 var line = _currentLine.ToString();
                 _currentLine.Clear();
+                
                 if (!string.IsNullOrWhiteSpace(line))
                 {
-                    if (_diagnostics)
+                    // Only basic post-processing now - no ANSI fragment handling needed
+                    var cleanedLine = PostProcessLine(line);
+                    
+                    if (!string.IsNullOrWhiteSpace(cleanedLine))
                     {
-                        Diag($"LineReceived: '{line}'");
+                        if (_diagnostics)
+                        {
+                            if (line != cleanedLine)
+                            {
+                                Diag($"Line post-processed: '{line}' -> '{cleanedLine}'");
+                            }
+                            Diag($"LineReceived: '{cleanedLine}'");
+                        }
+                        LineReceived?.Invoke(cleanedLine);
                     }
-                    LineReceived?.Invoke(line);
+                    else if (_diagnostics)
+                    {
+                        Diag($"Line filtered out after post-processing: '{line}'");
+                    }
                 }
             }
-            else if (c != '\r') // Skip carriage returns, but include everything else (except ANSI sequences)
+            else if (c != '\r') // Skip carriage returns, but include everything else
             {
-                _currentLine.Append(c);
+                // Only add printable characters and common whitespace to lines
+                // This prevents control characters from getting into line content
+                if (c >= 32 && c <= 126 || c == '\t')
+                {
+                    _currentLine.Append(c);
+                }
             }
         }
+    }
+
+    // TODO: Future color-aware line processing method
+    // This would be called instead of ProcessLinesFromPayload when color parsing is enabled
+    /*
+    private void ProcessLinesFromPayloadWithColor(List<byte> payload)
+    {
+        // Enhanced version that tracks ANSI color state and associates colors with text
+        // Could build ColoredLine objects with segments like:
+        // [
+        //   { Text: "A ", Color: White },
+        //   { Text: "red goblin", Color: Red },
+        //   { Text: " is here.", Color: White }
+        // ]
+    }
+    */
+    /// <summary>
+    /// Post-process line to remove unwanted content - simplified since AnsiParser handles ANSI sequences
+    /// </summary>
+    private string PostProcessLine(string line)
+    {
+        if (string.IsNullOrWhiteSpace(line)) return string.Empty;
+
+        // Enhanced stats block removal to handle timer artifacts
+        // Remove complete stats blocks
+        line = Regex.Replace(line, @"\[Hp=\d+/Mp=\d+/Mv=\d+(?:/At=\d+)?(?:/Ac=\d+)?\]", "");
+        
+        // Remove partial stats fragments that can appear due to timer updates
+        // These occur when AT/AC timers update while new content is being processed
+        line = Regex.Replace(line, @"\d+/Ac=\d+\]", "");  // Fragment like "3/Ac=3]"
+        line = Regex.Replace(line, @"/At=\d+/Ac=\d+\]", "");  // Fragment like "/At=3/Ac=3]"
+        line = Regex.Replace(line, @"/Ac=\d+\]", "");  // Fragment like "/Ac=3]"
+        line = Regex.Replace(line, @"Ac=\d+\]", "");   // Fragment like "Ac=3]"
+        
+        // Clean up extra whitespace
+        line = Regex.Replace(line, @"\s+", " ").Trim();
+        
+        // Filter out lines that are just movement commands
+        if (Regex.IsMatch(line, @"^\d*[A-Za-z]*[nsewud]$", RegexOptions.IgnoreCase))
+        {
+            if (_diagnostics)
+            {
+                Diag($"Filtered movement command: '{line}'");
+            }
+            return string.Empty;
+        }
+        
+        // Filter out lines that are too short
+        if (line.Length < 3)
+        {
+            if (_diagnostics && line.Length > 0)
+            {
+                Diag($"Filtered short line: '{line}'");
+            }
+            return string.Empty;
+        }
+        
+        return line;
     }
 
     private int VisibleCharEstimate()
@@ -618,25 +740,6 @@ public class TelnetClient
         }
     }
 
-    public void NotifyResize(int cols, int rows)
-    {
-        _currentCols = cols;
-        _currentRows = rows;
-
-        // Resize the screen buffer to match new dimensions
-        _screen.Resize(cols, rows);
-
-        if ((DateTime.UtcNow - _lastNawsSent).TotalMilliseconds < 500)
-        {
-            return; // throttle
-        }
-        _lastNawsSent = DateTime.UtcNow;
-        var list = new List<byte>();
-        _negotiation.UpdateWindowSize(cols, rows, list);
-        EnqueueRaw(list);
-        _logger.LogInformation("Sent NAWS {cols}x{rows}", cols, rows);
-    }
-
     private void EnqueueRaw(IEnumerable<byte> bytes)
     {
         foreach (var b in bytes)
@@ -706,5 +809,24 @@ public class TelnetClient
         {
             // normal
         }
+    }
+
+    public void NotifyResize(int cols, int rows)
+    {
+        _currentCols = cols;
+        _currentRows = rows;
+
+        // Resize the screen buffer to match new dimensions
+        _screen.Resize(cols, rows);
+
+        if ((DateTime.UtcNow - _lastNawsSent).TotalMilliseconds < 500)
+        {
+            return; // throttle
+        }
+        _lastNawsSent = DateTime.UtcNow;
+        var list = new List<byte>();
+        _negotiation.UpdateWindowSize(cols, rows, list);
+        EnqueueRaw(list);
+        _logger.LogInformation("Sent NAWS {cols}x{rows}", cols, rows);
     }
 }

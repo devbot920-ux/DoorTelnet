@@ -311,8 +311,7 @@ public partial class App : Application
                             if (!initialCommandsSent)
                             {
                                 var chk = line.Trim();
-                                if (chk.Contains("Obvious Exits:", StringComparison.OrdinalIgnoreCase) ||
-                                    chk.StartsWith("Exits:", StringComparison.OrdinalIgnoreCase) ||
+                                if (chk.StartsWith("Exits:", StringComparison.OrdinalIgnoreCase) ||
                                     chk.IndexOf("You rejoin the world", StringComparison.OrdinalIgnoreCase) >= 0 ||
                                     chk.StartsWith("Welcome", StringComparison.OrdinalIgnoreCase))
                                 {

@@ -201,6 +201,46 @@ public class RoomTracker
     public void AddLine(string line)
     {
         var originalLine = line;
+        
+        // Enhanced raw input logging - show the first 20 lines with hex representation
+        if (_lineBuffer.Count < 20)
+        {
+            var hexRep = new StringBuilder();
+            var printableRep = new StringBuilder();
+            
+            foreach (char c in originalLine.Take(100))
+            {
+                hexRep.Append($"{(int)c:X2} ");
+                if (c >= 32 && c <= 126)
+                {
+                    printableRep.Append(c);
+                }
+                else if (c == '\n')
+                {
+                    printableRep.Append("\\n");
+                }
+                else if (c == '\r')
+                {
+                    printableRep.Append("\\r");
+                }
+                else if (c == '\t')
+                {
+                    printableRep.Append("\\t");
+                }
+                else if (c == '\x1B')
+                {
+                    printableRep.Append("\\ESC");
+                }
+                else
+                {
+                    printableRep.Append($"[{(int)c:X2}]");
+                }
+            }
+            
+            System.Diagnostics.Debug.WriteLine($"??? RAW INPUT [{_lineBuffer.Count}]: '{printableRep}'");
+            System.Diagnostics.Debug.WriteLine($"    HEX: {hexRep}");
+        }
+        
         var cleanedLine = CleanLineContent(line);
 
         if (_lineBuffer.Count < 10 && originalLine != cleanedLine)
@@ -216,7 +256,16 @@ public class RoomTracker
         }
         else if (!string.IsNullOrEmpty(originalLine) && _lineBuffer.Count < 10)
         {
-            System.Diagnostics.Debug.WriteLine($"??? FILTERED OUT: '{originalLine}'");
+            // Check if it was filtered due to movement command
+            if (Regex.IsMatch(originalLine, @"^\d*[A-Za-z]*[nsewud]$", RegexOptions.IgnoreCase) ||
+                Regex.IsMatch(originalLine, @"\]\s*\d*[A-Za-z]*[nsewud]\s*$", RegexOptions.IgnoreCase))
+            {
+                System.Diagnostics.Debug.WriteLine($"??? FILTERED MOVEMENT COMMAND: '{originalLine}'");
+            }
+            else
+            {
+                System.Diagnostics.Debug.WriteLine($"??? FILTERED OUT: '{originalLine}'");
+            }
         }
     }
 
@@ -242,24 +291,41 @@ public class RoomTracker
     {
         if (string.IsNullOrEmpty(line)) return string.Empty;
 
+        var originalLine = line;
+
+        // Remove stats content from the line (TelnetClient should have done this, but safety net)
+        line = Regex.Replace(line, @"\[Hp=\d+/Mp=\d+/Mv=\d+(?:/At=\d+)?(?:/Ac=\d+)?\]", "", RegexOptions.IgnoreCase);
+
         var (afterStrip, had) = StripLeadingPartialStats(line);
         line = afterStrip;
 
         if (had && string.IsNullOrWhiteSpace(line)) return string.Empty;
 
-        if (Regex.IsMatch(line, @"^(p=|Mp=|Mv=|Ac=)\d+", RegexOptions.IgnoreCase)) return string.Empty;
+        if (Regex.IsMatch(line, @"^(p=|Mp=|Mv=)\d+", RegexOptions.IgnoreCase)) return string.Empty;
 
         var fragCount = Regex.Matches(line, @"(p=\d+|Mp=\d+|Mv=\d+)", RegexOptions.IgnoreCase).Count;
         if (fragCount >= 3 && !line.Contains("[Hp=")) return string.Empty;
 
-        // Comprehensive ANSI escape code removal, including less common variants.
-        line = Regex.Replace(line, @"\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])", "");
-        line = Regex.Replace(line, @"\x1B\[[0-9;]*[A-Za-z]", "");
-        line = Regex.Replace(line, @"\[[0-9;]*m", "");
-        line = Regex.Replace(line, @"\[[0-9]*[A-Za-z]", "");
-        line = Regex.Replace(line, @"\x1B[()][A-Za-z0-9]", "");
-        line = Regex.Replace(line, @"\[[0-9;]*[A-Za-z@]", "");
+        // TelnetClient should have already cleaned all ANSI sequences - this is just a safety net
+        var beforeBackupClean = line;
+        
+        // Minimal backup ANSI cleaning (should not be needed with proper TelnetClient)
+        line = Regex.Replace(line, @"\x1B\[[0-9;]*[A-Za-z@]", "", RegexOptions.IgnoreCase);
+        
+        // Log if we found ANSI content that TelnetClient missed (indicates a problem)
+        if (beforeBackupClean != line && beforeBackupClean.Length > 0)
+        {
+            System.Diagnostics.Debug.WriteLine($"??? BACKUP ANSI CLEANING TRIGGERED: '{beforeBackupClean}' -> '{line}' (TelnetClient should have handled this!)");
+        }
+        
+        // Movement command filtering (TelnetClient should handle this, but safety net)
+        if (Regex.IsMatch(line, @"^\d*[A-Za-z]*[nsewud]$", RegexOptions.IgnoreCase))
+        {
+            System.Diagnostics.Debug.WriteLine($"??? MOVEMENT FILTERED IN ROOMTRACKER: '{line}' (TelnetClient should have filtered this)");
+            return string.Empty;
+        }
 
+        // Basic character sanitization
         var sb = new StringBuilder();
         foreach (var c in line)
         {
@@ -274,13 +340,32 @@ public class RoomTracker
         }
 
         var result = Regex.Replace(sb.ToString(), @"\s+", " ").Trim();
-        return result.Length < 2 ? string.Empty : result;
+        
+        // Final length check
+        if (result.Length < 2)
+        {
+            if (originalLine != result && originalLine.Length > 2)
+            {
+                System.Diagnostics.Debug.WriteLine($"??? FILTERED TOO SHORT: '{result}' (from original: '{originalLine}')");
+            }
+            return string.Empty;
+        }
+
+        return result;
     }
 
     public bool TryUpdateRoom(string user, string character, string screenText)
     {
-        var handledLook = TryParseLookCommand(user, character, screenText); // don't return
+        var handledLook = TryParseLookCommand(user, character, screenText);
         bool anyUpdate = handledLook;
+
+        // If we just handled a look command, don't try to update the current room from the buffer
+        // because the look data should go to adjacent room data, not current room
+        if (handledLook)
+        {
+            System.Diagnostics.Debug.WriteLine("?? Skipping current room update due to look command processing");
+            return anyUpdate;
+        }
 
         if ((DateTime.UtcNow - _lastRoomChange).TotalMilliseconds < 25)
         {
@@ -326,7 +411,6 @@ public class RoomTracker
 
         return anyUpdate;
     }
-
 
     public bool UpdateMonsterDisposition(string monsterName, string newDisposition)
     {
@@ -630,6 +714,7 @@ public class RoomTracker
 
         if (string.IsNullOrWhiteSpace(roomContent)) return null;
 
+        // Check for look boundary but be more specific - only filter if it's JUST look data
         if (roomContent.IndexOf(LookBoundary, StringComparison.OrdinalIgnoreCase) >= 0)
         {
             var boundaryMatches = toMark
@@ -639,8 +724,25 @@ public class RoomTracker
             if (boundaryMatches.Any())
             {
                 _lineBuffer.MarkProcessed(boundaryMatches, l => l.ProcessedForRoomDetection = true);
+                System.Diagnostics.Debug.WriteLine($"?? Found look boundary, marking {boundaryMatches.Count} lines as processed");
             }
-            return null;
+            
+            // Only return null if the content STARTS with the look boundary (indicating pure look data)
+            // If the boundary appears in the middle, it might be mixed content
+            var trimmedContent = roomContent.Trim();
+            if (trimmedContent.StartsWith(LookBoundary, StringComparison.OrdinalIgnoreCase))
+            {
+                System.Diagnostics.Debug.WriteLine("?? Content starts with look boundary - deferring room parsing");
+                return null;
+            }
+            else
+            {
+                System.Diagnostics.Debug.WriteLine("?? Look boundary found in middle of content - continuing to parse");
+                // Remove the look boundary lines from content but continue parsing
+                var cleanedLines = lines.Where(l => l.IndexOf(LookBoundary, StringComparison.OrdinalIgnoreCase) < 0).ToList();
+                roomContent = string.Join('\n', cleanedLines);
+                toMark = toMark.Where(b => b.Content.IndexOf(LookBoundary, StringComparison.OrdinalIgnoreCase) < 0).ToList();
+            }
         }
 
         bool exitsKeywordPresent = roomContent.IndexOf("Exits:", StringComparison.OrdinalIgnoreCase) >= 0;
@@ -658,6 +760,7 @@ public class RoomTracker
             }
 
             _lineBuffer.MarkProcessed(toMark, l => l.ProcessedForRoomDetection = true);
+            System.Diagnostics.Debug.WriteLine($"?? ROOM PARSED: '{state.Name}' (exits: {string.Join(",", state.Exits)}, monsters: {state.Monsters.Count})");
         }
         else
         {
@@ -682,7 +785,7 @@ public class RoomTracker
                || c.Contains(" enters ")
                || c.Contains(" leaves ")
                || c.Contains(" follows you")
-               || Regex.IsMatch(c, @"^(?:.+?)\s+(?:is|are|stands|lurks|waits)\s+here\.?$", RegexOptions.IgnoreCase);
+               || Regex.IsMatch(c, @"^(?:.+?)\s+(?:is|are)\s+here\.?$", RegexOptions.IgnoreCase);
     }
 
     private static bool IsObviouslyNonRoomLine(string line)
@@ -691,35 +794,110 @@ public class RoomTracker
 
         line = line.Trim();
 
+        // First, try to strip out stats blocks and see if remaining content could be room info
+        var originalLine = line;
+        
+        // Remove complete stats blocks like [Hp=2018/Mp=750/Mv=921/At=3/Ac=3]
+        line = Regex.Replace(line, @"\[Hp=\d+/Mp=\d+/Mv=\d+(?:/At=\d+)?(?:/Ac=\d+)?\]", "", RegexOptions.IgnoreCase);
+        
+        // Remove partial stats fragments
+        line = Regex.Replace(line, @"^(?:[\x00-\x20]*p=\d+/Mp=\d+/Mv=\d+\]?\s*)+", "", RegexOptions.IgnoreCase);
+        line = Regex.Replace(line, @"^(p=|Mp=|Mv=|Ac=)\d+[^\]]*\]?", "", RegexOptions.IgnoreCase);
+        
+        // Clean up whitespace
+        line = line.Trim();
+        
+        // If we stripped stats and found potential room content, don't filter it out
+        if (originalLine != line && !string.IsNullOrWhiteSpace(line))
+        {
+            // Check if the remaining content looks like room information
+            if (HasPotentialRoomContent(line))
+            {
+                return false; // Don't filter - this could be room info with stats prefix
+            }
+        }
+
+        // Use the cleaned line for further checks
+        line = string.IsNullOrWhiteSpace(line) ? originalLine : line;
+
+        // Check for obvious stats-only lines (handled by TelnetClient, but keep as safety net)
         if (RoomParser.IsStatsLine(line)) return true;
+        
+        // Check for stats fragments (handled by TelnetClient PostProcessLine, but keep as safety net)
         if (Regex.IsMatch(line, @"^(p=|Mp=|Mv=|Ac=)\d+", RegexOptions.IgnoreCase)) return true;
         if (line.Contains("p=") && line.Contains("Mp=") && line.Contains("Mv=") && !line.Contains("[Hp=")) return true;
-        if (line.StartsWith(">")
-            || line.StartsWith("Enter")
-            || line.StartsWith("Press")
-            || line.StartsWith("Type")
-            || line.StartsWith("Command:")
-            || line.StartsWith("Password:")
-            || line.StartsWith("Username:")
+        
+        // Movement commands (should be filtered by TelnetClient, but keep as safety net)
+        if (Regex.IsMatch(line, @"^\d*[A-Za-z]*[nsewud]$", RegexOptions.IgnoreCase)) return true;
+        
+        // System/connection messages
+        if (line.StartsWith("}") 
+            || line.StartsWith(">") 
+            || line.StartsWith("Press") 
+            || line.StartsWith("Type") 
+            || line.StartsWith("Command:") 
+            || line.StartsWith("Password:") 
+            || line.StartsWith("Username:") 
             || line.StartsWith("Login:"))
         {
             return true;
         }
 
+        // Very short lines
         if (line.Length < 3) return true;
 
+        // Connection status messages
         if (line.Contains("connected")
             || line.Contains("logged in")
             || line.Contains("disconnected")
-            || line.Contains("Welcome")
-            || line.Contains("Goodbye")
             || line.Contains("*** "))
         {
             return true;
         }
 
+        // Malformed bracket lines
         if (Regex.IsMatch(line, @"^[\]})][^a-zA-Z]*$")) return true;
 
+        return false;
+    }
+
+    /// <summary>
+    /// Check if a line (after stats removal) contains potential room content
+    /// </summary>
+    private static bool HasPotentialRoomContent(string cleanedLine)
+    {
+        if (string.IsNullOrWhiteSpace(cleanedLine)) return false;
+        
+        // Check for room-like content indicators
+        if (cleanedLine.Contains("Exits:", StringComparison.OrdinalIgnoreCase)
+            || cleanedLine.Contains(" is here", StringComparison.OrdinalIgnoreCase)
+            || cleanedLine.Contains(" are here", StringComparison.OrdinalIgnoreCase)
+            || cleanedLine.Contains(" lay here", StringComparison.OrdinalIgnoreCase)
+            || cleanedLine.Contains(" lays here", StringComparison.OrdinalIgnoreCase)
+            || cleanedLine.Contains("summoned for combat", StringComparison.OrdinalIgnoreCase)
+            || cleanedLine.Contains(" enters ", StringComparison.OrdinalIgnoreCase)
+            || cleanedLine.Contains(" leaves ", StringComparison.OrdinalIgnoreCase)
+            || cleanedLine.Contains(" follows you", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+        
+        // Check if it looks like a room title/description (more than 5 chars, contains letters)
+        if (cleanedLine.Length >= 5 && cleanedLine.Count(char.IsLetter) >= 3)
+        {
+            // Exclude common non-room messages
+            if (!cleanedLine.StartsWith("You ", StringComparison.OrdinalIgnoreCase)
+                && !cleanedLine.StartsWith("Your ", StringComparison.OrdinalIgnoreCase)
+                && !cleanedLine.Contains("suffered", StringComparison.OrdinalIgnoreCase)
+                && !cleanedLine.Contains("damage", StringComparison.OrdinalIgnoreCase)
+                && !cleanedLine.Contains("experience", StringComparison.OrdinalIgnoreCase)
+                && !cleanedLine.Contains("Welcome", StringComparison.OrdinalIgnoreCase)
+                && !cleanedLine.Contains("Goodbye", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+        
         return false;
     }
 
@@ -755,13 +933,11 @@ public class RoomTracker
             .ToList();
 
         var lookPattern = new Regex(@"^(?:\[Hp=.*?\]\s*)?(?:look|l)\s+(north|south|east|west|northeast|northwest|southeast|southwest|up|down|n|s|e|w|ne|nw|se|sw|u|d)\s*$", RegexOptions.IgnoreCase);
-        var movementPattern = new Regex(@"^(?:\[Hp=.*?\]\s*)?(n|s|e|w|ne|nw|se|sw|u|d)(?:\s|$)|^(?:\[Hp=.*?\]\s*)?(north|south|east|west|northeast|northwest|southeast|southwest|up|down)(?:\s|$)", RegexOptions.IgnoreCase);
-
-        // after you build `lines`:
-        int lookIdx = -1;
-        string? dir = null;
+        var movementPattern = new Regex(@"^\[Hp=.*?\]\s*(n|s|w|e|ne|se|nw|sw|u|d|north|south|east|west|northeast|northwest|southeast|southwest|up|down)(?:\s|$)", RegexOptions.IgnoreCase);
 
         // find the LAST look echo
+        int lookIdx = -1;
+        string? dir = null;
         for (int i = lines.Count - 1; i >= 0; i--)
         {
             var m = lookPattern.Match(lines[i]);
@@ -786,24 +962,32 @@ public class RoomTracker
         }
         if (boundaryIndex < 0) return false;
 
-        // treat any movement AFTER the look echo (not just after boundary)
+        // Look for ACTUAL movement commands after the look echo
+        // Only detect explicit directional movement commands, NOT room descriptions
         int movementIdx = -1;
         for (int i = Math.Max(lookIdx + 1, 0); i < lines.Count; i++)
         {
-            if (movementPattern.IsMatch(lines[i]) ||
-                lines[i].IndexOf("You have entered", StringComparison.OrdinalIgnoreCase) >= 0)
+            var line = lines[i];
+            
+            // Check for explicit movement commands only (n, s, 3n, etc.)
+            if (movementPattern.IsMatch(line))
             {
                 movementIdx = i;
-                break;
+                System.Diagnostics.Debug.WriteLine($"?? MOVEMENT DETECTED (command): line {i} = '{line}'");
+                return false;
             }
         }
 
-        // build remote segment between boundary and next thing (movement or end)
+        // build remote segment between boundary and movement (or end if no movement)
         var remoteLines = movementIdx > 0
             ? lines.Skip(boundaryIndex + 1).Take(movementIdx - (boundaryIndex + 1)).ToList()
             : lines.Skip(boundaryIndex + 1).ToList();
 
         var remoteSegment = string.Join('\n', remoteLines);
+        
+        System.Diagnostics.Debug.WriteLine($"?? LOOK ANALYSIS: dir={dir}, lookIdx={lookIdx}, boundaryIdx={boundaryIndex}, movementIdx={movementIdx}");
+        System.Diagnostics.Debug.WriteLine($"   Remote segment ({remoteLines.Count} lines): '{string.Join(" | ", remoteLines.Take(3))}'");
+        
         if (!string.IsNullOrWhiteSpace(remoteSegment) && CurrentRoom != null)
         {
             var parsed = RoomParser.Parse(remoteSegment);
@@ -826,6 +1010,8 @@ public class RoomTracker
                     LinkRooms(user, character, CurrentRoom.Name, dir, parsed.Name);
                 }
                 _lastLookParsed = DateTime.UtcNow;
+                
+                System.Diagnostics.Debug.WriteLine($"?? LOOK PARSED: {dir} -> '{parsed.Name}' (monsters: {parsed.Monsters.Count}, exits: {string.Join(",", parsed.Exits)})");
             }
         }
 
@@ -849,32 +1035,22 @@ public class RoomTracker
             if (toMark.Count > 0)
             {
                 _lineBuffer.MarkProcessed(toMark, l => l.ProcessedForRoomDetection = true);
+                System.Diagnostics.Debug.WriteLine($"?? LOOK PROCESSING: marked {toMark.Count} lines as processed");
             }
         }
         catch { }
 
-        // Return true if we didn't find a movement command after the look
-        return movementIdx == -1;
-    }
-
-    private static string NormalizeDirection(string dir)
-    {
-        dir = dir.ToLowerInvariant();
-        return dir switch
+        // Return true if we found a valid look, regardless of movement detection
+        // The key insight: we should always return true for valid look parsing
+        // Movement detection is just used to limit what gets marked as processed
+        var foundValidLook = !string.IsNullOrWhiteSpace(remoteSegment);
+        
+        if (foundValidLook)
         {
-            "n" => "north",
-            "s" => "south",
-            "e" => "east",
-            "w" => "west",
-            "ne" => "northeast",
-            "nw" => "northwest",
-            "se" => "southeast",
-            "sw" => "southwest",
-            "u" => "up",
-            "d" => "down",
-            "north" or "south" or "east" or "west" or "northeast" or "northwest" or "southeast" or "southwest" or "up" or "down" => dir,
-            _ => null
-        };
+            System.Diagnostics.Debug.WriteLine($"?? LOOK COMMAND HANDLED: movement detected = {movementIdx > 0}");
+        }
+        
+        return foundValidLook;
     }
 
     public void UpdateRoom(string user, string character, RoomState state)
@@ -1081,6 +1257,26 @@ public class RoomTracker
         "down" => "up",
         _ => string.Empty
     };
+
+    private static string? NormalizeDirection(string dir)
+    {
+        dir = dir.ToLowerInvariant();
+        return dir switch
+        {
+            "n" => "north",
+            "s" => "south",
+            "e" => "east",
+            "w" => "west",
+            "ne" => "northeast",
+            "nw" => "northwest",
+            "se" => "southeast",
+            "sw" => "southwest",
+            "u" => "up",
+            "d" => "down",
+            "north" or "south" or "east" or "west" or "northeast" or "northwest" or "southeast" or "southwest" or "up" or "down" => dir,
+            _ => null
+        };
+    }
 }
 
 public static class RoomParser
@@ -1092,7 +1288,7 @@ public static class RoomParser
     private static readonly Regex LayHere = new(@"^(.+?)\s+lay\s+here\.?(\s+|\s*[\.,])$", RegexOptions.IgnoreCase | RegexOptions.Multiline);
     private static readonly Regex TitleLike = new(@"^[A-Za-z0-9' ,\-()]{3,60}$");
     private static readonly Regex StatsLine = new(@"\[Hp=\d+/Mp=\d+/Mv=\d+(?:/At=\d+)?(?:/Ac=\d+)?\]", RegexOptions.Compiled);
-    private static readonly Regex MovementCommands = new(@"^\[Hp=.*?\]\s*(n|s|e|w|ne|nw|se|sw|u|d)(?:\s|$)|^\[Hp=.*?\]\s*(north|south|east|west|northeast|northwest|southeast|southwest|up|down)(?:\s|$)", RegexOptions.IgnoreCase);
+    private static readonly Regex MovementCommands = new(@"^\[Hp=.*?\]\s*\d*[A-Za-z]*[nsewud](?:\s|$)|^\[Hp=.*?\]\s*(north|south|east|west|northeast|northwest|southeast|southwest|up|down)(?:\s|$)", RegexOptions.IgnoreCase);
     private static readonly Regex InvalidRoomNames = new(@"(exits|sorry|no such exit|you peer)", RegexOptions.IgnoreCase);
 
     private static string? NormalizeDir(string t)
@@ -1220,8 +1416,17 @@ public static class RoomParser
     {
         if (string.IsNullOrEmpty(s)) return string.Empty;
 
+        // TelnetClient should have already cleaned all ANSI sequences
+        // This is just a safety net for any missed sequences
+        var beforeClean = s;
         s = Regex.Replace(s, @"\x1B\[[0-9;?]*[A-Za-z]", "");
         s = Regex.Replace(s, @"\x1B[\[()][0-9;]*[A-Za-z@]", "");
+
+        // Log if we found ANSI content (indicates TelnetClient missed something)
+        if (s != beforeClean)
+        {
+            System.Diagnostics.Debug.WriteLine($"??? ROOMPARSER ANSI CLEANING: TelnetClient should have cleaned this!");
+        }
 
         var sb = new StringBuilder();
         foreach (var c in s)
