@@ -402,6 +402,9 @@ public class CombatTracker
         if (string.IsNullOrWhiteSpace(cleanedLine)) return false;
         bool foundCombatEvent = false;
 
+        // Enhanced debug logging for troubleshooting
+        System.Diagnostics.Debug.WriteLine($"?? COMBAT PROCESSING: '{cleanedLine}'");
+
         if (_previousCleanLine != null && cleanedLine.Contains("You suffered", StringComparison.OrdinalIgnoreCase))
         {
             var dmgMatch = NumberRegex.Match(cleanedLine);
@@ -410,6 +413,7 @@ public class CombatTracker
                 string? attacker = FindMatchingRoomMonster(_previousCleanLine);
                 if (!string.IsNullOrWhiteSpace(attacker) && !attacker.Contains("suffered", StringComparison.OrdinalIgnoreCase))
                 {
+                    System.Diagnostics.Debug.WriteLine($"?? MONSTER DAMAGE DETECTED: '{attacker}' -> {dmg} damage");
                     RecordMonsterDamage(attacker, dmg);
                     foundCombatEvent = true;
                     _previousCleanLine = cleanedLine;
@@ -423,14 +427,44 @@ public class CombatTracker
         // Check for melee targeting first (happens when player initiates attack)
         if (TryParseMeleeTargeting(cleanedLine, out var targetedMonster))
         {
-            // TryParseMeleeTargeting now handles everything - no need for additional calls
+            System.Diagnostics.Debug.WriteLine($"?? MELEE TARGET: '{targetedMonster}'");
             foundCombatEvent = true;
         }
 
-        if (TryParsePlayerDamage(cleanedLine, out var playerDamage)) { RecordPlayerDamage(playerDamage.target, playerDamage.damage); foundCombatEvent = true; }
-        if (TryParseMonsterDamage(cleanedLine, out var monsterDamage)) { RecordMonsterDamage(monsterDamage.monster, monsterDamage.damage); foundCombatEvent = true; }
-        if (TryParseDeathEvent(cleanedLine, out var deathInfo)) { ProcessMonsterDeath(deathInfo.monsters); foundCombatEvent = true; }
-        if (TryParseExperience(cleanedLine, out var experience)) { AssignExperienceToRecentCombats(experience); foundCombatEvent = true; }
+        if (TryParsePlayerDamage(cleanedLine, out var playerDamage)) 
+        { 
+            System.Diagnostics.Debug.WriteLine($"?? PLAYER DAMAGE: '{playerDamage.target}' -> {playerDamage.damage} damage");
+            RecordPlayerDamage(playerDamage.target, playerDamage.damage); 
+            foundCombatEvent = true; 
+        }
+        
+        if (TryParseMonsterDamage(cleanedLine, out var monsterDamage)) 
+        { 
+            System.Diagnostics.Debug.WriteLine($"?? MONSTER DAMAGE: '{monsterDamage.monster}' -> {monsterDamage.damage} damage");
+            RecordMonsterDamage(monsterDamage.monster, monsterDamage.damage); 
+            foundCombatEvent = true; 
+        }
+        
+        if (TryParseDeathEvent(cleanedLine, out var deathInfo)) 
+        { 
+            System.Diagnostics.Debug.WriteLine($"?? DEATH EVENT: {string.Join(", ", deathInfo.monsters)} from '{deathInfo.deathLine}'");
+            ProcessMonsterDeath(deathInfo.monsters, deathInfo.deathLine); 
+            foundCombatEvent = true; 
+        }
+        
+        if (TryParseExperience(cleanedLine, out var experience)) 
+        { 
+            System.Diagnostics.Debug.WriteLine($"? EXPERIENCE: {experience}");
+            AssignExperienceToRecentCombats(experience); 
+            foundCombatEvent = true; 
+        }
+
+        // Debug log for lines that don't match any patterns
+        if (!foundCombatEvent && HasPotentialCombatContent(cleanedLine))
+        {
+            System.Diagnostics.Debug.WriteLine($"? POTENTIAL COMBAT LINE NOT PARSED: '{cleanedLine}'");
+        }
+
         return foundCombatEvent;
     }
 
@@ -658,13 +692,86 @@ public class CombatTracker
         result = default;
 
         if (!IsDeathLine(line))
+        {
+            // Debug log for lines that look like they might be death lines but don't match
+            var trimmed = line.TrimEnd('.', '!', '?', ' ');
+            var words = trimmed.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+            if (words.Length > 0)
+            {
+                var lastWord = words[^1].ToLowerInvariant();
+                var firstWord = words[0].ToLowerInvariant();
+                
+                if (DeathWords.Contains(lastWord))
+                {
+                    System.Diagnostics.Debug.WriteLine($"??? DEATH WORD BUT NO ARTICLE: '{line}' (first: '{firstWord}', last: '{lastWord}')");
+                }
+                else if ((firstWord == "the" || firstWord == "a" || firstWord == "an"))
+                {
+                    System.Diagnostics.Debug.WriteLine($"??? ARTICLE BUT NO DEATH WORD: '{line}' (first: '{firstWord}', last: '{lastWord}')");
+                }
+            }
             return false;
+        }
+
+        System.Diagnostics.Debug.WriteLine($"??? DEATH LINE DETECTED: '{line}'");
 
         // Use the same monster matching logic as RoomTracker for consistency
         var foundMonsters = FindMatchingMonstersForDeath(line);
 
+        System.Diagnostics.Debug.WriteLine($"???? FOUND MONSTERS FOR DEATH: {foundMonsters.Count} ({string.Join(", ", foundMonsters)})");
+
         if (foundMonsters.Count == 0)
+        {
+            System.Diagnostics.Debug.WriteLine($"??? NO MONSTERS MATCHED DEATH LINE: '{line}'");
+            
+            // Debug: Show current room monsters and active combats
+            if (_roomTracker?.CurrentRoom?.Monsters != null)
+            {
+                System.Diagnostics.Debug.WriteLine($"?? CURRENT ROOM MONSTERS: {_roomTracker.CurrentRoom.Monsters.Count}");
+                foreach (var m in _roomTracker.CurrentRoom.Monsters)
+                {
+                    System.Diagnostics.Debug.WriteLine($"    '{m.Name}' - matches: {line.Contains(m.Name?.Replace(" (summoned)", "") ?? "", StringComparison.OrdinalIgnoreCase)}");
+                }
+            }
+            
+            lock (_sync)
+            {
+                System.Diagnostics.Debug.WriteLine($"?? ACTIVE COMBATS: {_activeCombats.Count}");
+                foreach (var kvp in _activeCombats)
+                {
+                    var baseName = RemoveArticles(kvp.Value.MonsterName);
+                    System.Diagnostics.Debug.WriteLine($"    '{kvp.Key}' (base: '{baseName}') - matches: {line.Contains(kvp.Key, StringComparison.OrdinalIgnoreCase) || line.Contains(baseName, StringComparison.OrdinalIgnoreCase)}");
+                }
+            }
+            
             return false;
+        }
+
+        // Check if we've recently processed this death line
+        lock (_sync)
+        {
+            var now = DateTime.UtcNow;
+
+            // Remove old entries from recent deaths
+            foreach (var key in _recentDeathLines.Keys.ToList())
+            {
+                if (now - _recentDeathLines[key] > _deathLineTimeout)
+                {
+                    _recentDeathLines.Remove(key);
+                }
+            }
+
+            // Check if this death line is in the recent list
+            var lineKey = string.Join(",", foundMonsters.OrderBy(m => m));
+            if (_recentDeathLines.ContainsKey(lineKey))
+            {
+                System.Diagnostics.Debug.WriteLine($"??? RECENT DEATH LINE IGNORED: '{line}' (duplicate)");
+                return false;
+            }
+
+            // Remember this death line as processed
+            _recentDeathLines[lineKey] = now;
+        }
 
         result = (foundMonsters, line);
         return true;
@@ -746,10 +853,37 @@ public class CombatTracker
     /// Process monster deaths and move combats to awaiting experience
     /// Enhanced with better name resolution and debug logging
     /// </summary>
-    private void ProcessMonsterDeath(List<string> monsterNames)
+    private void ProcessMonsterDeath(List<string> monsterNames, string? deathLine = null)
     {
         lock (_sync)
         {
+            // Clean up old death line tracking first
+            var now = DateTime.UtcNow;
+            var expiredDeathLines = _recentDeathLines
+                .Where(kvp => (now - kvp.Value) > _deathLineTimeout)
+                .Select(kvp => kvp.Key)
+                .ToList();
+            
+            foreach (var expired in expiredDeathLines)
+            {
+                _recentDeathLines.Remove(expired);
+            }
+
+            // Check if we've recently processed this exact death line
+            if (!string.IsNullOrEmpty(deathLine))
+            {
+                var deathKey = deathLine.Trim().ToLowerInvariant();
+                if (_recentDeathLines.ContainsKey(deathKey))
+                {
+                    System.Diagnostics.Debug.WriteLine($"???? SKIPPING DUPLICATE DEATH: '{deathLine}' (processed {(now - _recentDeathLines[deathKey]).TotalMilliseconds:F0}ms ago)");
+                    return;
+                }
+                
+                // Mark this death line as processed
+                _recentDeathLines[deathKey] = now;
+                System.Diagnostics.Debug.WriteLine($"???? MARKING DEATH LINE: '{deathLine}'");
+            }
+
             var actuallyProcessed = new List<string>();
 
             foreach (var monsterName in monsterNames)
@@ -792,7 +926,7 @@ public class CombatTracker
 
             if (actuallyProcessed.Count != monsterNames.Count)
             {
-                System.Diagnostics.Debug.WriteLine($"??? DEATH PROCESSING: Found {actuallyProcessed.Count}/{monsterNames.Count} monsters in active combats");
+                System.Diagnostics.Debug.WriteLine($"???? DEATH PROCESSING: Found {actuallyProcessed.Count}/{monsterNames.Count} monsters in active combats");
             }
         }
     }
@@ -831,8 +965,8 @@ public class CombatTracker
     /// </summary>
     public void NotifyMonsterDeath(List<string> monsterNames, string deathLine)
     {
-        System.Diagnostics.Debug.WriteLine($"?? EXTERNAL DEATH NOTIFICATION: {string.Join(", ", monsterNames)} from '{deathLine}'");
-        ProcessMonsterDeath(monsterNames);
+        System.Diagnostics.Debug.WriteLine($"?????? EXTERNAL DEATH NOTIFICATION: {string.Join(", ", monsterNames)} from '{deathLine}'");
+        ProcessMonsterDeath(monsterNames, deathLine);
     }
 
     /// <summary>
@@ -870,7 +1004,6 @@ public class CombatTracker
     }
 
     // Missing field for previous clean line tracking
-    private string? _previousCleanLine;
 
     /// <summary>
     /// Remove articles and common prefixes from monster names for matching
