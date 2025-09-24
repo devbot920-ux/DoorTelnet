@@ -5,8 +5,6 @@ VisualStudioVersion = 17.0.31903.59
 MinimumVisualStudioVersion = 10.0.40219.1
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "DoorTelnet.Core", "DoorTelnet.Core\DoorTelnet.Core.csproj", "{CC251C1B-F4DC-411F-8664-2ABEDCDA2DEF}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "DoorTelnet.Cli", "DoorTelnet.Cli\DoorTelnet.Cli.csproj", "{179DC691-C7A8-4850-BF48-45053121325C}"
-EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "DoorTelnet.Wpf", "DoorTelnet.Wpf\DoorTelnet.Wpf.csproj", "{8BCE51B8-8643-4087-88BE-9CA614AE7C9A}"
 EndProject
 Global
@@ -31,18 +29,6 @@ Global
 		{CC251C1B-F4DC-411F-8664-2ABEDCDA2DEF}.Release|x64.Build.0 = Release|Any CPU
 		{CC251C1B-F4DC-411F-8664-2ABEDCDA2DEF}.Release|x86.ActiveCfg = Release|Any CPU
 		{CC251C1B-F4DC-411F-8664-2ABEDCDA2DEF}.Release|x86.Build.0 = Release|Any CPU
-		{179DC691-C7A8-4850-BF48-45053121325C}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
-		{179DC691-C7A8-4850-BF48-45053121325C}.Debug|Any CPU.Build.0 = Debug|Any CPU
-		{179DC691-C7A8-4850-BF48-45053121325C}.Debug|x64.ActiveCfg = Debug|Any CPU
-		{179DC691-C7A8-4850-BF48-45053121325C}.Debug|x64.Build.0 = Debug|Any CPU
-		{179DC691-C7A8-4850-BF48-45053121325C}.Debug|x86.ActiveCfg = Debug|Any CPU
-		{179DC691-C7A8-4850-BF48-45053121325C}.Debug|x86.Build.0 = Debug|Any CPU
-		{179DC691-C7A8-4850-BF48-45053121325C}.Release|Any CPU.ActiveCfg = Release|Any CPU
-		{179DC691-C7A8-4850-BF48-45053121325C}.Release|Any CPU.Build.0 = Release|Any CPU
-		{179DC691-C7A8-4850-BF48-45053121325C}.Release|x64.ActiveCfg = Release|Any CPU
-		{179DC691-C7A8-4850-BF48-45053121325C}.Release|x64.Build.0 = Release|Any CPU
-		{179DC691-C7A8-4850-BF48-45053121325C}.Release|x86.ActiveCfg = Release|Any CPU
-		{179DC691-C7A8-4850-BF48-45053121325C}.Release|x86.Build.0 = Release|Any CPU
 		{8BCE51B8-8643-4087-88BE-9CA614AE7C9A}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
 		{8BCE51B8-8643-4087-88BE-9CA614AE7C9A}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{8BCE51B8-8643-4087-88BE-9CA614AE7C9A}.Debug|x64.ActiveCfg = Debug|Any CPU
