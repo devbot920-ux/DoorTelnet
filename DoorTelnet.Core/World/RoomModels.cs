@@ -303,6 +303,7 @@ public class RoomTracker
 
         var toAdd = new List<MonsterInfo>();
         var toRemove = new List<string>();
+        var deathNotifications = new List<(List<string> monsters, string line)>(); // Store death notifications to send outside lock
 
         foreach (var bl in unprocessed)
         {
@@ -353,19 +354,8 @@ public class RoomTracker
                 {
                     toRemove.AddRange(matches);
                     
-                    // Notify CombatTracker about the death if available
-                    try
-                    {
-                        if (CombatTracker != null)
-                        {
-                            var notifyMethod = CombatTracker.GetType().GetMethod("NotifyMonsterDeath");
-                            notifyMethod?.Invoke(CombatTracker, new object[] { matches, line });
-                        }
-                    }
-                    catch (Exception ex)
-                    {
-                        System.Diagnostics.Debug.WriteLine($"?? COMBAT NOTIFICATION ERROR: {ex.Message}");
-                    }
+                    // Store death notification to send outside lock to prevent deadlocks
+                    deathNotifications.Add((matches, line));
                 }
             }
         }
@@ -405,6 +395,44 @@ public class RoomTracker
         };
 
         UpdateRoom(user, character, newState);
+
+        // Notify CombatTracker about newly summoned monsters so they can be tracked for auto-attack
+        foreach (var add in toAdd)
+        {
+            if (add.Disposition.Equals("aggressive", StringComparison.OrdinalIgnoreCase))
+            {
+                try
+                {
+                    if (CombatTracker != null)
+                    {
+                        var ensureMethod = CombatTracker.GetType().GetMethod("EnsureMonsterTracked");
+                        ensureMethod?.Invoke(CombatTracker, new object[] { add.Name });
+                    }
+                }
+                catch (Exception ex)
+                {
+                    System.Diagnostics.Debug.WriteLine($"?? COMBAT TRACKING ERROR: {ex.Message}");
+                }
+            }
+        }
+
+        // Send death notifications OUTSIDE the lock to prevent deadlocks
+        foreach (var (monsters, line) in deathNotifications)
+        {
+            try
+            {
+                if (CombatTracker != null)
+                {
+                    var notifyMethod = CombatTracker.GetType().GetMethod("NotifyMonsterDeath");
+                    notifyMethod?.Invoke(CombatTracker, new object[] { monsters, line });
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"?? COMBAT NOTIFICATION ERROR: {ex.Message}");
+            }
+        }
+
         return true;
     }
 

@@ -51,9 +51,24 @@ public class CombatTracker
     {
         get
         {
-            lock (_sync)
+            bool lockTaken = false;
+            try
             {
+                Monitor.TryEnter(_sync, TimeSpan.FromMilliseconds(50), ref lockTaken);
+                if (!lockTaken)
+                {
+                    // Return empty list if lock is contended to prevent UI freezing
+                    System.Diagnostics.Debug.WriteLine("?? COMBAT COMPLETED: Lock timeout - returning empty list to prevent deadlock");
+                    return new List<CombatEntry>();
+                }
                 return _completedCombats.ToList();
+            }
+            finally
+            {
+                if (lockTaken)
+                {
+                    Monitor.Exit(_sync);
+                }
             }
         }
     }
@@ -62,9 +77,24 @@ public class CombatTracker
     {
         get
         {
-            lock (_sync)
+            bool lockTaken = false;
+            try
             {
+                Monitor.TryEnter(_sync, TimeSpan.FromMilliseconds(50), ref lockTaken);
+                if (!lockTaken)
+                {
+                    // Return empty list if lock is contended to prevent UI freezing
+                    System.Diagnostics.Debug.WriteLine("?? COMBAT ACTIVE: Lock timeout - returning empty list to prevent deadlock");
+                    return new List<ActiveCombat>();
+                }
                 return _activeCombats.Values.ToList();
+            }
+            finally
+            {
+                if (lockTaken)
+                {
+                    Monitor.Exit(_sync);
+                }
             }
         }
     }
@@ -191,6 +221,13 @@ public class CombatTracker
     private void ClearAllTargeting()
     {
         foreach (var combat in _activeCombats.Values)
+        {
+            combat.IsTargeted = false;
+            combat.TargetedTime = null;
+        }
+        
+        // Also clear targeting from combats awaiting experience
+        foreach (var combat in _combatsAwaitingExperience)
         {
             combat.IsTargeted = false;
             combat.TargetedTime = null;
@@ -354,18 +391,43 @@ public class CombatTracker
     private void ProcessSingleMonsterDeath(ActiveCombat combat, string monsterKey)
     {
         combat.DeathTime = DateTime.UtcNow;
-        combat.AwaitingExperience = true;
-
+        
+        // Immediately complete the combat when monster dies - don't wait for XP
+        var completedEntry = combat.Complete("Victory", 0); // XP will be assigned later if available
+        
+        // Add to completed combats immediately
+        _completedCombats.Add(completedEntry);
+        
+        // Store targeting info for auto-attack (separate from XP awaiting)
         if (combat.IsTargeted)
         {
-            combat.IsTargeted = false;
-            combat.TargetedTime = null;
+            // Create a copy with targeting info for auto-attack purposes
+            var targetingInfo = new ActiveCombat
+            {
+                MonsterName = combat.MonsterName,
+                StartTime = combat.StartTime,
+                DamageDealt = combat.DamageDealt,
+                DamageTaken = combat.DamageTaken,
+                LastDamageTime = combat.LastDamageTime,
+                DeathTime = combat.DeathTime,
+                IsTargeted = combat.IsTargeted,
+                TargetedTime = combat.TargetedTime,
+                AwaitingExperience = false // Not awaiting XP anymore
+            };
+            _combatsAwaitingExperience.Add(targetingInfo);
         }
-
-        _combatsAwaitingExperience.Add(combat);
+        
+        // Remove from active combats immediately
         _activeCombats.Remove(monsterKey);
+        
+        // Debug: Log immediate completion
+        System.Diagnostics.Debug.WriteLine($"?? COMBAT COMPLETED: '{combat.MonsterName}' died, combat completed immediately. IsTargeted={combat.IsTargeted} preserved for auto-attack");
 
+        // Fire completion event immediately
+        CombatCompleted?.Invoke(completedEntry);
         MonsterDeath?.Invoke($"Combat with '{combat.MonsterName}' ended");
+        
+        // XP checking is separate and optional
         RequestExperienceCheck?.Invoke();
     }
 
@@ -373,21 +435,33 @@ public class CombatTracker
     {
         lock (_sync)
         {
-            var eligibleCombats = _combatsAwaitingExperience
-                .Where(c => c.AwaitingExperience && 
-                           c.DeathTime.HasValue && 
-                           (DateTime.UtcNow - c.DeathTime.Value) <= _experienceTimeout)
-                .OrderBy(c => c.DeathTime)
+            // Look for recently completed combats that haven't been assigned XP yet
+            var recentCompletedCombats = _completedCombats
+                .Where(c => c.ExperienceGained == 0 && // No XP assigned yet
+                           c.EndTime.HasValue &&
+                           (DateTime.UtcNow - c.EndTime.Value) <= _experienceTimeout)
+                .OrderBy(c => c.EndTime)
                 .ToList();
 
-            if (eligibleCombats.Count > 0)
+            if (recentCompletedCombats.Count > 0)
             {
-                var targetCombat = eligibleCombats.Last();
-                var completedEntry = targetCombat.Complete("Victory", experience);
-
-                _completedCombats.Add(completedEntry);
-                _combatsAwaitingExperience.Remove(targetCombat);
-                CombatCompleted?.Invoke(completedEntry);
+                var targetCombat = recentCompletedCombats.Last();
+                
+                // Assign XP to the most recent combat
+                targetCombat.ExperienceGained = experience;
+                
+                System.Diagnostics.Debug.WriteLine($"?? XP ASSIGNED: {experience} XP assigned to completed combat '{targetCombat.MonsterName}'");
+            }
+            
+            // Clean up old targeting entries that are no longer needed
+            var expiredTargetingEntries = _combatsAwaitingExperience
+                .Where(c => c.DeathTime.HasValue && (DateTime.UtcNow - c.DeathTime.Value) > TimeSpan.FromMinutes(2))
+                .ToList();
+                
+            foreach (var expired in expiredTargetingEntries)
+            {
+                _combatsAwaitingExperience.Remove(expired);
+                System.Diagnostics.Debug.WriteLine($"?? TARGETING EXPIRED: Removed expired targeting for '{expired.MonsterName}'");
             }
         }
     }
@@ -395,12 +469,74 @@ public class CombatTracker
     // Public interface methods
     public void NotifyMonsterDeath(List<string> monsterNames, string deathLine) => ProcessMonsterDeath(monsterNames);
 
+    /// <summary>
+    /// Manually assign experience to the most recent combat that hasn't received XP yet.
+    /// This should be called when XP is gained through XP commands or other means.
+    /// </summary>
+    public bool TryAssignExperienceToRecentCombat(int experience)
+    {
+        lock (_sync)
+        {
+            var recentCombat = _completedCombats
+                .Where(c => c.ExperienceGained == 0 && // No XP assigned yet
+                           c.EndTime.HasValue &&
+                           (DateTime.UtcNow - c.EndTime.Value) <= _experienceTimeout)
+                .OrderByDescending(c => c.EndTime)
+                .FirstOrDefault();
+
+            if (recentCombat != null)
+            {
+                recentCombat.ExperienceGained = experience;
+                System.Diagnostics.Debug.WriteLine($"?? MANUAL XP ASSIGNMENT: {experience} XP assigned to '{recentCombat.MonsterName}'");
+                return true;
+            }
+
+            System.Diagnostics.Debug.WriteLine($"?? MANUAL XP ASSIGNMENT FAILED: No recent combat found for {experience} XP");
+            return false;
+        }
+    }
+
     public ActiveCombat? GetTargetedMonster()
     {
         lock (_sync)
         {
+            // First check active combats
             var targetedCombat = _activeCombats.Values.FirstOrDefault(c => c.IsTargeted);
-            if (targetedCombat == null) return null;
+            
+            // If no active targeted combat found, check combats awaiting experience
+            // This allows auto-attack to continue with newly summoned monsters of the same type
+            if (targetedCombat == null)
+            {
+                targetedCombat = _combatsAwaitingExperience.FirstOrDefault(c => c.IsTargeted);
+                
+                // Debug: Log when we find targeting in awaiting experience
+                if (targetedCombat != null)
+                {
+                    System.Diagnostics.Debug.WriteLine($"?? TARGETING FOUND in awaiting experience: '{targetedCombat.MonsterName}' (dead for {(DateTime.UtcNow - (targetedCombat.DeathTime ?? DateTime.UtcNow)).TotalSeconds:F1}s)");
+                }
+                
+                // Check if the dead monster's targeting has expired (2 minutes after death)
+                if (targetedCombat != null && targetedCombat.DeathTime.HasValue && 
+                    (DateTime.UtcNow - targetedCombat.DeathTime.Value) > TimeSpan.FromMinutes(2))
+                {
+                    // Clear expired targeting
+                    System.Diagnostics.Debug.WriteLine($"?? TARGETING EXPIRED for dead monster: '{targetedCombat.MonsterName}' (dead for {(DateTime.UtcNow - targetedCombat.DeathTime.Value).TotalMinutes:F1} minutes)");
+                    targetedCombat.IsTargeted = false;
+                    targetedCombat.TargetedTime = null;
+                    targetedCombat = null;
+                }
+            }
+            else
+            {
+                // Debug: Log when we find targeting in active combats
+                System.Diagnostics.Debug.WriteLine($"?? TARGETING FOUND in active combats: '{targetedCombat.MonsterName}'");
+            }
+            
+            if (targetedCombat == null) 
+            {
+                System.Diagnostics.Debug.WriteLine("?? NO TARGETED MONSTER found");
+                return null;
+            }
 
             // Return a copy to avoid thread safety issues
             return new ActiveCombat
@@ -420,8 +556,19 @@ public class CombatTracker
 
     public CombatStatistics GetStatistics()
     {
-        lock (_sync)
+        // Use a non-blocking approach to prevent UI thread deadlocks
+        // If we can't get the lock quickly, return cached/default stats
+        bool lockTaken = false;
+        try
         {
+            Monitor.TryEnter(_sync, TimeSpan.FromMilliseconds(100), ref lockTaken);
+            if (!lockTaken)
+            {
+                // Return empty stats if lock is contended to prevent UI freezing
+                System.Diagnostics.Debug.WriteLine("?? COMBAT STATS: Lock timeout - returning empty stats to prevent deadlock");
+                return new CombatStatistics();
+            }
+
             var completed = _completedCombats.Where(c => c.IsCompleted).ToList();
 
             return new CombatStatistics
@@ -438,6 +585,13 @@ public class CombatTracker
                 Deaths = completed.Count(c => c.Status == "Death"),
                 Flees = completed.Count(c => c.Status == "Fled")
             };
+        }
+        finally
+        {
+            if (lockTaken)
+            {
+                Monitor.Exit(_sync);
+            }
         }
     }
 
@@ -459,6 +613,7 @@ public class CombatTracker
         {
             var now = DateTime.UtcNow;
             
+            // Clean up stale active combats (shouldn't happen often with immediate completion)
             var staleCombats = _activeCombats.Values.Where(c => c.IsStale(_combatTimeout)).ToList();
             foreach (var staleCombat in staleCombats)
             {
@@ -469,19 +624,19 @@ public class CombatTracker
                     _completedCombats.Add(completedEntry);
                     _activeCombats.Remove(key);
                     CombatCompleted?.Invoke(completedEntry);
+                    System.Diagnostics.Debug.WriteLine($"?? STALE COMBAT: Timed out combat '{staleCombat.MonsterName}'");
                 }
             }
 
-            var staleExperienceEntries = _combatsAwaitingExperience
-                .Where(c => c.DeathTime.HasValue && (now - c.DeathTime.Value) > _experienceTimeout)
+            // Clean up old targeting entries (these are just for auto-attack, not XP)
+            var staleTargetingEntries = _combatsAwaitingExperience
+                .Where(c => c.DeathTime.HasValue && (now - c.DeathTime.Value) > TimeSpan.FromMinutes(2))
                 .ToList();
                 
-            foreach (var staleEntry in staleExperienceEntries)
+            foreach (var staleEntry in staleTargetingEntries)
             {
-                var completedEntry = staleEntry.Complete("Victory", 0);
-                _completedCombats.Add(completedEntry);
                 _combatsAwaitingExperience.Remove(staleEntry);
-                CombatCompleted?.Invoke(completedEntry);
+                System.Diagnostics.Debug.WriteLine($"?? STALE TARGETING: Removed stale targeting for '{staleEntry.MonsterName}'");
             }
         }
     }
@@ -490,28 +645,70 @@ public class CombatTracker
     {
         lock (_sync)
         {
-            if (_activeCombats.Count == 0) return "No active combats";
-
             var sb = new System.Text.StringBuilder();
-            sb.AppendLine($"Active Combats ({_activeCombats.Count}):");
-
-            foreach (var kvp in _activeCombats)
+            
+            if (_activeCombats.Count > 0)
             {
-                var combat = kvp.Value;
-                sb.AppendLine($"  '{kvp.Key}': Dealt={combat.DamageDealt}, Taken={combat.DamageTaken}, " +
-                             $"Duration={combat.DurationSeconds:F1}s, Targeted={combat.IsTargeted}");
+                sb.AppendLine($"Active Combats ({_activeCombats.Count}):");
+                foreach (var kvp in _activeCombats)
+                {
+                    var combat = kvp.Value;
+                    sb.AppendLine($"  '{kvp.Key}': Dealt={combat.DamageDealt}, Taken={combat.DamageTaken}, " +
+                                 $"Duration={combat.DurationSeconds:F1}s, Targeted={combat.IsTargeted}");
+                }
             }
 
             if (_combatsAwaitingExperience.Count > 0)
             {
-                sb.AppendLine($"Awaiting Experience ({_combatsAwaitingExperience.Count}):");
+                sb.AppendLine($"Targeting Info for Auto-Attack ({_combatsAwaitingExperience.Count}):");
                 foreach (var combat in _combatsAwaitingExperience)
                 {
-                    sb.AppendLine($"  '{combat.MonsterName}': Dealt={combat.DamageDealt}");
+                    var timeSinceDeath = combat.DeathTime.HasValue ? 
+                        $"{(DateTime.UtcNow - combat.DeathTime.Value).TotalSeconds:F1}s ago" : "unknown";
+                    sb.AppendLine($"  '{combat.MonsterName}': Dead {timeSinceDeath}, Targeted={combat.IsTargeted}");
                 }
+            }
+            
+            var recentCompletedCount = _completedCombats.Count(c => 
+                c.EndTime.HasValue && (DateTime.UtcNow - c.EndTime.Value).TotalMinutes < 5);
+            sb.AppendLine($"Recent Completed Combats (last 5 min): {recentCompletedCount}");
+
+            if (_activeCombats.Count == 0 && _combatsAwaitingExperience.Count == 0)
+            {
+                return "No active combats or targeting info";
             }
 
             return sb.ToString();
+        }
+    }
+
+    /// <summary>
+    /// Create combat tracking for a summoned monster to ensure auto-attack can target it
+    /// This is called when monsters are summoned but haven't engaged in combat yet
+    /// </summary>
+    public void EnsureMonsterTracked(string monsterName)
+    {
+        lock (_sync)
+        {
+            var resolvedName = _nameResolver.ResolveToRoomMonsterName(monsterName);
+            
+            // Only create if not already tracked
+            if (!_activeCombats.ContainsKey(resolvedName))
+            {
+                var combat = new ActiveCombat
+                {
+                    MonsterName = resolvedName,
+                    StartTime = DateTime.UtcNow,
+                    LastDamageTime = DateTime.UtcNow,
+                    IsTargeted = false,
+                    TargetedTime = null
+                };
+                _activeCombats[resolvedName] = combat;
+                
+                System.Diagnostics.Debug.WriteLine($"?? MONSTER TRACKED: '{resolvedName}' added for auto-attack targeting");
+                
+                Task.Run(() => CombatStarted?.Invoke(combat));
+            }
         }
     }
 

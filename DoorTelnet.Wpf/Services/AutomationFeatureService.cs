@@ -60,6 +60,7 @@ public class AutomationFeatureService : IDisposable
         // Subscribe to combat targeting events
         _combat.MonsterTargeted += OnMonsterTargeted;
         _combat.MonsterDeath += OnMonsterDeath;
+        _combat.MonsterBecameAggressive += OnMonsterBecameAggressive;
     }
 
     private int _hpPct; // cached
@@ -299,8 +300,15 @@ public class AutomationFeatureService : IDisposable
                             const int minGongIntervalMs = 2000; // minimal guard between gong rings
                             var aggressivePresent = room.Monsters.Any(m => m.Disposition.Equals("aggressive", StringComparison.OrdinalIgnoreCase));
 
-                            // Waiting for timers to reset after loot phase
-                            if (!aggressivePresent && _waitingForTimers)
+                            // If we're waiting for timers but aggressive monsters are present, reset immediately and attack
+                            if (_waitingForTimers && aggressivePresent)
+                            {
+                                _waitingForTimers = false;
+                                _inGongCycle = true; // Re-enter combat mode to attack the monsters
+                                _logger.LogTrace("AutoGong timer reset due to aggressive monsters - entering combat mode");
+                            }
+                            // Normal timer reset when no aggressive monsters
+                            else if (!aggressivePresent && _waitingForTimers)
                             {
                                 if (timersReady)
                                 {
@@ -405,6 +413,7 @@ public class AutomationFeatureService : IDisposable
         _client.LineReceived -= OnLine;
         _combat.MonsterTargeted -= OnMonsterTargeted;
         _combat.MonsterDeath -= OnMonsterDeath;
+        _combat.MonsterBecameAggressive -= OnMonsterBecameAggressive;
     }
 
     // Simple script parser supporting {ENTER} and {WAIT:ms}
@@ -521,5 +530,37 @@ public class AutomationFeatureService : IDisposable
             }
         }
         catch { }
+    }
+
+    private void OnMonsterBecameAggressive(string monsterName)
+    {
+        _logger.LogInformation("Monster '{monster}' became aggressive - triggering immediate attack check", monsterName);
+        
+        // If AutoGong is enabled and we're not in critical health, immediately check for attack
+        var feats = _profile.Features;
+        if (feats.AutoGong && _stats.MaxHp > 0)
+        {
+            var hpPercent = _hpPct;
+            var th = _profile.Thresholds;
+            
+            if (hpPercent >= th.GongMinHpPercent)
+            {
+                // If we're waiting for timers, reset and enter combat mode
+                if (_waitingForTimers)
+                {
+                    _waitingForTimers = false;
+                    _inGongCycle = true;
+                    _logger.LogTrace("AutoGong entering combat mode due to aggressive monster '{monster}'", monsterName);
+                }
+                
+                // Trigger immediate attack check
+                AttackAggressiveMonsters("AutoGong-Immediate");
+            }
+        }
+        else if (feats.AutoAttack && !feats.AutoGong)
+        {
+            // Independent AutoAttack mode
+            AttackAggressiveMonsters("AutoAttack-Immediate");
+        }
     }
 }

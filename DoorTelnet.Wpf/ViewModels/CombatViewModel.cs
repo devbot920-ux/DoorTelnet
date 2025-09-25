@@ -111,13 +111,30 @@ public class CombatViewModel : ViewModelBase
     private void UpdateStats()
     {
         _lastCleanup = DateTime.UtcNow;
-        var stats = _tracker.GetStatistics();
-        TotalCombats = stats.TotalCombats;
-        TotalExperience = stats.TotalExperience;
-        TotalDamageDealt = stats.TotalDamageDealt;
-        TotalDamageTaken = stats.TotalDamageTaken;
-        AvgDps = stats.TotalCombats > 0 ? (double)TotalDamageDealt / stats.TotalCombats : 0;
-        WinRate = stats.WinRate * 100.0;
+        
+        // Call GetStatistics from background thread to prevent UI blocking
+        Task.Run(() =>
+        {
+            try
+            {
+                var stats = _tracker.GetStatistics();
+                
+                // Update UI properties on UI thread
+                App.Current.Dispatcher.BeginInvoke(() =>
+                {
+                    TotalCombats = stats.TotalCombats;
+                    TotalExperience = stats.TotalExperience;
+                    TotalDamageDealt = stats.TotalDamageDealt;
+                    TotalDamageTaken = stats.TotalDamageTaken;
+                    AvgDps = stats.TotalCombats > 0 ? (double)TotalDamageDealt / stats.TotalCombats : 0;
+                    WinRate = stats.WinRate * 100.0;
+                });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error updating combat statistics");
+            }
+        });
     }
 
     private void ClearHistory()
