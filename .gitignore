@@ -361,3 +361,89 @@ MigrationBackup/
 
 # Fody - auto-generated XML schema
 FodyWeavers.xsd
+
+# =============================================================================
+# DoorTelnet-specific files
+# =============================================================================
+
+# User credential and data files (stored in %APPDATA%\DoorTelnet\)
+# These are included as extra safety in case they're ever created in the project directory
+credentials.json
+key.bin
+settings.json
+characters.json
+
+# Player statistics and data
+stats.json
+playerstats.json
+
+# Environment-specific configuration files
+appsettings.Development.json
+appsettings.Local.json
+appsettings.Production.json
+appsettings.Staging.json
+**/appsettings.*.json
+!**/appsettings.json
+
+# User-specific script files
+scripts/user/
+scripts/personal/
+scripts/private/
+
+# Lua script files that might contain personal data
+*.personal.lua
+*.private.lua
+
+# Log files and debugging output
+*.log
+logs/
+debug/
+trace/
+
+# Temporary and backup files
+*.tmp
+*.temp
+*.bak
+*.backup
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Editor backup and swap files
+*~
+*.swp
+*.swo
+
+# JetBrains Rider
+.idea/
+*.sln.iml
+
+# Visual Studio Code workspace settings (keep basic settings, ignore personal ones)
+.vscode/
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+*.code-workspace
+
+# Test coverage reports
+coverage/
+*.lcov
+
+# Test results
+TestResults/
+*.trx
+
+# Profiling and performance results  
+*.dotMemoryUnit
+
+# Application data directories (if created in project root by mistake)
+AppData/
+LocalAppData/
+DoorTelnet/
