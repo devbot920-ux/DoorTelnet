@@ -2,528 +2,325 @@
 
 ## Project Overview
 
-DoorTelnet is a .NET 8 Windows application that provides a telnet client for connecting to MUD (Multi-User Dungeon) games, specifically designed for Rose COG. The application consists of two main projects:
+DoorTelnet is a .NET 8 WPF-based telnet client designed for MUD (Multi-User Dungeon) gaming, featuring automation, scripting, and real-time game state tracking. The architecture follows a clean separation between core business logic and presentation layers.
 
-- **DoorTelnet.Core**: Core functionality library containing business logic, networking, and game mechanics
-- **DoorTelnet.Cli**: Windows Forms-based user interface and presentation layer
+## Project Structure
+
+The solution consists of two primary projects:
+
+### DoorTelnet.Core
+**Business Logic Layer** - Contains all core functionality, game logic, and data processing:
+
+```
+DoorTelnet.Core/
+├── Automation/          # Rule engine and stats tracking
+├── Combat/              # Combat event processing and tracking
+├── Player/              # Player profiles, credentials, settings
+├── Scripting/           # Lua scripting engine integration
+├── Telnet/              # Telnet protocol implementation
+├── Terminal/            # Screen buffer and ANSI processing
+└── World/               # Room tracking and game world state
+```
+
+### DoorTelnet.Wpf
+**Presentation Layer** - WPF UI, view models, and UI services:
+
+```
+DoorTelnet.Wpf/
+├── Controls/            # Custom WPF controls
+├── Converters/          # Value converters for data binding
+├── Services/            # UI-specific services
+├── ViewModels/          # MVVM view models
+├── Views/               # XAML views and code-behind
+│   └── Dialogs/         # Modal dialog windows
+├── Styles/              # WPF styling resources
+└── Themes/              # Application themes
+```
+
+## Logic Segmentation Principles
+
+### File Size Management for LLM Processing
+To ensure files remain manageable for Large Language Model processing:
+
+**Maximum File Sizes:**
+- Core logic files: **≤ 500 lines**
+- ViewModels: **≤ 300 lines**  
+- Views (code-behind): **≤ 200 lines**
+- Service classes: **≤ 400 lines**
+
+**When files approach these limits:**
+
+1. **Extract Related Functionality** into separate classes
+2. **Create Specialized Services** for complex operations
+3. **Use Partial Classes** for large ViewModels when appropriate
+4. **Split Complex Parsers** into focused, single-responsibility classes
+
+### Functional Decomposition Examples
+
+**❌ Avoid Monolithic Classes:**
+```csharp
+// DON'T: One massive CombatProcessor handling everything
+public class CombatProcessor 
+{
+    // 800+ lines handling parsing, tracking, calculations, events...
+}
+```
+
+**✅ Prefer Focused, Composable Classes:**
+```csharp
+// DO: Split into focused responsibilities
+public class CombatLineParser { }      // 150 lines - parsing only
+public class CombatTracker { }         // 200 lines - state tracking
+public class CombatEventProcessor { }  // 100 lines - event handling
+public class CombatStatistics { }     // 120 lines - calculations
+```
+
+### Namespace Organization
+```csharp
+// Core business logic - no UI dependencies
+namespace DoorTelnet.Core.Combat
+namespace DoorTelnet.Core.World  
+namespace DoorTelnet.Core.Player
+
+// UI layer - depends on Core
+namespace DoorTelnet.Wpf.ViewModels
+namespace DoorTelnet.Wpf.Services
+namespace DoorTelnet.Wpf.Views
+```
+
+## Functionality Implementation Rules
+
+### ⚠️ Critical: Do Not Assume Functionality
+
+**Always verify existing functionality before extending:**
+
+1. **Search the codebase** for existing implementations
+2. **Check existing patterns** and follow established conventions  
+3. **Only implement what is explicitly requested**
+4. **Do not add features** that aren't specifically asked for
+5. **Ask for clarification** if requirements are ambiguous
+
+### ❌ Common Anti-Patterns to Avoid:
+```csharp
+// DON'T assume UI elements exist
+var button = FindButton("SaveButton"); // May not exist!
+
+// DON'T assume methods exist
+player.SaveToDatabase(); // Database layer may not be implemented!
+
+// DON'T add unrequested features  
+public void AutoSaveEvery5Minutes() { } // Not requested!
+```
+
+### ✅ Proper Implementation Approach:
+```csharp
+// DO: Check if functionality exists first
+var existingService = serviceProvider.GetService<ISaveService>();
+if (existingService != null) 
+{
+    // Use existing service
+}
+
+// DO: Follow existing patterns
+// Check how similar functionality is implemented elsewhere
+```
 
 ## Architecture Patterns
 
-### 1. Layered Architecture
-The solution follows a clear separation of concerns:
-
-```
-┌─────────────────────────┐
-│   Presentation Layer    │  ← DoorTelnet.Cli (WinForms UI)
-├─────────────────────────┤
-│   Business Logic Layer  │  ← DoorTelnet.Core (Game Logic)
-├─────────────────────────┤
-│   Data Access Layer     │  ← File-based stores & serialization
-└─────────────────────────┘
-```
-
-### 2. Observer Pattern
-Extensive use of events for loose coupling between components:
-- `StatsTracker.Updated` event for real-time statistics
-- `UiLogProvider.Message` event for logging
-- `CombatTracker` events for combat state changes
-- `ScriptEngine` events (`OnConnect`, `OnTick`) for automation
-
-### 3. Strategy Pattern
-- **AnsiParser**: Different parsing strategies for terminal control sequences
-- **TelnetNegotiation**: Configurable negotiation strategies for different terminal types
-- **RuleEngine**: Pluggable regex-based rule system for automation
-
-### 4. Factory Pattern
-- **UiLogProvider**: Creates logger instances for different categories
-- **ScriptEngine**: Creates and configures MoonSharp scripting instances
-
-### 5. Repository Pattern
-Data persistence through specialized stores:
-- `PlayerStatsStore`: Player statistics persistence
-- `CredentialStore`: Encrypted credential management
-- `CharacterProfileStore`: Character profile data
-
-### 6. Command Pattern
-- **TelnetClient**: Queue-based command processing with `_outQueue`
-- **ScriptEngine**: Command queuing system (`_sendQueue`, `_immediateChars`)
-
-## Code Formatting Standards
-
-### 1. Method and Class Documentation
-All public methods and classes must have XML documentation:
+### Dependency Injection
+The application uses Microsoft.Extensions.DependencyInjection throughout:
 
 ```csharp
-/// <summary>
-/// Processes incoming telnet data and updates the screen buffer
-/// </summary>
-/// <param name="data">Raw telnet data bytes</param>
-/// <param name="cancellationToken">Cancellation token for async operations</param>
-/// <returns>True if processing was successful</returns>
-public async Task<bool> ProcessDataAsync(byte[] data, CancellationToken cancellationToken)
+// Register services in App.xaml.cs
+services.AddSingleton<RoomTracker>();
+services.AddSingleton<CombatTracker>();
+services.AddTransient<SettingsViewModel>();
+
+// Inject dependencies via constructor
+public class CombatViewModel(CombatTracker combatTracker, PlayerProfile profile)
 {
-    // Implementation
+    private readonly CombatTracker _combatTracker = combatTracker;
+    private readonly PlayerProfile _profile = profile;
 }
 ```
 
-### 2. Inline Comments for Complex Logic
-Precede complex operations with explanatory comments:
+### Event-Driven Architecture
+Core components communicate through events to maintain loose coupling:
 
 ```csharp
-// Check if this is a stats line and apply enhanced cleaning to prevent timer artifacts
-if (isStatsLine)
+// Publishers raise events
+public event Action<RoomState>? RoomChanged;
+
+// Subscribers handle events  
+roomTracker.RoomChanged += OnRoomChanged;
+```
+
+### MVVM Pattern (WPF Layer)
+```csharp
+// ViewModels extend ViewModelBase and use CommunityToolkit.Mvvm
+[ObservableProperty] private string _playerName = "";
+
+[RelayCommand]
+private async Task ConnectAsync()
 {
-    // Look for common patterns that indicate timer artifacts
-    var patterns = new[] { "/Ac=", "/At=", "Ac=", "At=" };
-    
-    foreach (var pattern in patterns)
-    {
-        // Find the end of this pattern and clean artifacts
-        int patternStart = currentLine.IndexOf(pattern);
-        // ... implementation
-    }
+    // Command logic here
 }
 ```
 
-### 3. Statement Separation and Line Breaks
-Always add newlines after semicolons for better readability:
+## Code Quality Standards
+
+### Method Formatting
+**Each statement on its own line for clarity:**
 
 ```csharp
-// ❌ BAD: Multiple statements on one line
-CursorY++; CursorX = 0; ScrollIfNeeded(); return;
-
-// ✅ GOOD: Each statement on its own line
-CursorY++;
-CursorX = 0;
-ScrollIfNeeded();
-return;
-```
-
-### 4. Method Spacing
-Separate method definitions with blank lines:
-
-```csharp
-/// <summary>
-/// Queues a line of text for transmission
-/// </summary>
-/// <param name="text">Text to queue</param>
-public void QueueLine(string text)
+// ✅ CORRECT: Each statement on separate line
+public void ProcessCombatLine(string line)
 {
-    lock (_sendQueue)
-    {
-        _sendQueue.Enqueue(text + "\r\n");
-    }
-}
-
-/// <summary>
-/// Queues raw text without line ending
-/// </summary>
-/// <param name="text">Raw text to queue</param>
-public void QueueRaw(string text)
-{
-    lock (_sendQueue)
-    {
-        _sendQueue.Enqueue(text);
-    }
-}
-```
-
-### 5. Property and Field Formatting
-Group related properties and fields with appropriate spacing:
-
-```csharp
-// Core components
-private readonly Script _script;
-private readonly RuleEngine _ruleEngine;
-private readonly ScreenBuffer _screen;
-
-// Queue management
-internal readonly Queue<string> _sendQueue = new();
-private readonly Queue<char> _immediateChars = new();
-
-// Configuration properties
-public int InterKeyDelayMs { get; set; } = 30;
-
-// Events
-public event Action? OnConnect;
-public event Action? OnTick;
-```
-
-### 6. Constructor Formatting
-Format constructors with clear parameter alignment:
-
-```csharp
-/// <summary>
-/// Initializes a new instance of the ScriptEngine
-/// </summary>
-/// <param name="screen">Screen buffer for display operations</param>
-/// <param name="ruleEngine">Rule engine for automation</param>
-public ScriptEngine(
-    ScreenBuffer screen, 
-    RuleEngine ruleEngine)
-{
-    _screen = screen;
-    _ruleEngine = ruleEngine;
-    _script = new Script(CoreModules.Preset_Complete);
-    
-    RegisterApi();
-}
-```
-
-### 7. Control Structure Formatting
-Always use braces and proper indentation:
-
-```csharp
-// ❌ BAD: No braces, inline statements
-if (func.Type != DataType.Function) return;
-
-// ✅ GOOD: Braces with proper formatting
-if (func.Type != DataType.Function)
-{
-    return;
-}
-
-// Complex conditions with proper line breaks
-if (currentLine.Contains("Hp=") || 
-    currentLine.Contains("Mp=") ||
-    currentLine.Contains("Mv="))
-{
-    // Process stats line
-    ProcessStatsLine(currentLine);
-}
-```
-
-### 8. Collection and LINQ Formatting
-Format complex LINQ operations across multiple lines:
-
-```csharp
-// ❌ BAD: Long single line
-var monsterStats = completedCombats.GroupBy(c => c.MonsterName).Select(g => new { MonsterName = g.Key, Kills = g.Count() }).OrderByDescending(m => m.Kills).ToList();
-
-// ✅ GOOD: Multi-line with proper indentation
-var monsterStats = completedCombats
-    .GroupBy(c => c.MonsterName)
-    .Select(g => new
-    {
-        MonsterName = g.Key,
-        Kills = g.Count(),
-        TotalExperience = g.Sum(c => c.ExperienceGained),
-        AverageExperience = g.Average(c => c.ExperienceGained)
-    })
-    .OrderByDescending(m => m.Kills)
-    .ThenByDescending(m => m.TotalExperience)
-    .ToList();
-```
-
-### 9. Switch Statement Formatting
-Use consistent formatting for switch statements:
-
-```csharp
-switch (mode)
-{
-    case 0:
-        // Erase to end of line
-        if (EnhancedStatsLineCleaning)
-        {
-            EraseToEndOfLineEnhanced();
-        }
-        else
-        {
-            EraseToEndOfLine();
-        }
-        break;
-        
-    case 1:
-        // Erase from start of line
-        EraseFromStartOfLine();
-        break;
-        
-    case 2:
-        // Erase entire line
-        EraseLine();
-        break;
-        
-    default:
-        // Handle unexpected mode
-        throw new ArgumentException($"Invalid erase mode: {mode}");
-}
-```
-
-### 10. Expression-Bodied Members
-Use expression-bodied members for simple operations:
-
-```csharp
-// Simple property accessors
-public bool IsConnected => _tcp?.Connected ?? false;
-
-// Simple method implementations
-public void RaiseConnect() => OnConnect?.Invoke();
-public void RaiseTick() => OnTick?.Invoke();
-
-// But avoid for complex operations - use full method body instead
-public void ComplexOperation()
-{
-    // Complex logic should use full method body
-    lock (_sync)
-    {
-        // Multiple statements
-        ValidateState();
-        ProcessData();
-        UpdateStatus();
-    }
-}
-```
-
-## Coding Standards
-
-### Naming Conventions
-
-#### Classes and Public Members
-```csharp
-public class PlayerStatsStore          // PascalCase for classes
-public void ProcessLine(string line)   // PascalCase for methods
-public string Username { get; set; }   // PascalCase for properties
-public event Action? Updated;          // PascalCase for events
-```
-
-#### Private Fields and Local Variables
-```csharp
-private readonly ScreenBuffer _screen;     // _camelCase for private fields
-private readonly object _sync = new();     // _camelCase with descriptive names
-private static readonly Regex NumberRegex  // PascalCase for static readonly
-```
-
-#### Constants and Static Fields
-```csharp
-private const int MaxEntries = 1000;           // PascalCase for constants
-private static readonly string[] DeathWords    // PascalCase for static arrays
-```
-
-### Code Organization
-
-#### Namespace Structure
-```csharp
-namespace DoorTelnet.Core.Automation;    // Feature-based organization
-namespace DoorTelnet.Core.Combat;        // Domain-driven namespaces
-namespace DoorTelnet.Core.Player;        // Clear functional grouping
-namespace DoorTelnet.Core.Terminal;      // Technical layer separation
-```
-
-#### File Organization
-- One public class per file
-- Filename matches the primary class name
-- Related classes (like inner classes) kept in same file
-- Enums and records co-located with related classes
-
-### Defensive Programming
-
-#### Thread Safety
-```csharp
-private readonly object _sync = new();
-
-/// <summary>
-/// Updates player statistics in a thread-safe manner
-/// </summary>
-public void UpdateStats()
-{
-    lock (_sync)
-    {
-        // Thread-safe operations
-    }
-}
-```
-
-#### Null Safety
-```csharp
-/// <summary>
-/// Processes a line of input if it's not null or empty
-/// </summary>
-/// <param name="line">Line to process</param>
-public void ProcessLine(string? line)
-{
-    if (string.IsNullOrWhiteSpace(line)) 
-    {
+    var match = _combatRegex.Match(line);
+    if (!match.Success) 
         return;
+        
+    var damage = int.Parse(match.Groups["damage"].Value);
+    var target = match.Groups["target"].Value;
+    
+    UpdateCombatStats(damage, target);
+    RaiseCombatEvent(new CombatEvent { Damage = damage, Target = target });
+}
+
+// ❌ INCORRECT: Multiple statements per line
+public void ProcessCombatLine(string line)
+{
+    var match = _combatRegex.Match(line); if (!match.Success) return;
+    var damage = int.Parse(match.Groups["damage"].Value); var target = match.Groups["target"].Value;
+}
+```
+
+### Method Separation
+**Always separate methods with blank lines:**
+
+```csharp
+public class RoomTracker
+{
+    public void UpdateCurrentRoom(RoomState room)
+    {
+        CurrentRoom = room;
+        RoomChanged?.Invoke(room);
     }
-    
-    // Process non-null line
+
+    public void AddMonster(Monster monster)  
+    {
+        _monsters.Add(monster);
+        MonsterAdded?.Invoke(monster);
+    }
+
+    private void ValidateRoomState(RoomState room)
+    {
+        if (string.IsNullOrEmpty(room.Name))
+            throw new ArgumentException("Room name required");
+    }
 }
 ```
 
-#### Exception Handling
-```csharp
-try 
-{ 
-    _script.Call(func, m.Value); 
-} 
-catch (Exception ex)
-{ 
-    // Log the exception for debugging
-    _logger.LogWarning(ex, "Script execution failed");
-}
-```
+### Regex Compilation
+**Always compile frequently-used regex patterns:**
 
-### Memory Management
-
-#### Resource Disposal
 ```csharp
-/// <summary>
-/// Properly disposes of all resources
-/// </summary>
-public void Dispose()
+public class CombatLineParser 
 {
-    _cts?.Cancel();
-    _tcp?.Close();
-    _stream?.Dispose();
+    // ✅ Pre-compiled regex for performance
+    private static readonly Regex DamagePattern = new(
+        @"You hit (?<target>\w+) for (?<damage>\d+) points of damage", 
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
+    // ❌ Avoid creating regex on every call
+    public bool ParseDamage(string line)
+    {
+        var regex = new Regex(@"pattern"); // Creates new regex each time!
+        return regex.IsMatch(line);
+    }
 }
 ```
 
-#### Efficient String Handling
-```csharp
-// Reuse StringBuilder for multiple operations
-private readonly StringBuilder _currentLine = new();
+### Thread Safety
+**Always protect shared mutable state:**
 
-// Local StringBuilder for formatting
-var sb = new StringBuilder();
-```
-
-#### Collection Management
 ```csharp
-// Prevent unbounded growth with size limits
-if (_lstLog.Items.Count > 1000) 
+public class RoomTracker
 {
-    _lstLog.Items.RemoveAt(0);
+    private readonly object _sync = new();
+    private readonly Dictionary<string, RoomState> _rooms = new();
+
+    public void UpdateRoom(string key, RoomState room)
+    {
+        lock (_sync)
+        {
+            _rooms[key] = room;
+        }
+    }
+
+    public RoomState? GetRoom(string key)
+    {
+        lock (_sync)
+        {
+            return _rooms.TryGetValue(key, out var room) ? room : null;
+        }
+    }
 }
 ```
 
-## UI Design Patterns
+### Exception Handling
+**Graceful degradation with logging:**
 
-### 1. MVP (Model-View-Presenter) Influence
-- **StatsForm**: Acts as both View and Presenter
-- **PlayerProfile**: Model containing game state
-- Clear separation between UI logic and business logic
-
-### 2. Event-Driven UI Updates
 ```csharp
-/// <summary>
-/// Sets up event handlers for real-time updates
-/// </summary>
-private void SetupEventHandlers()
+public bool ProcessLine(string line)
 {
-    _timer.Tick += (_, _) => RefreshSummary();
-    _stats.Updated += () => BeginInvoke(new Action(RefreshSummary));
+    try 
+    {
+        // Processing logic here
+        return true;
+    }
+    catch (Exception ex)
+    {
+        _logger.LogError(ex, "Failed to process line: {Line}", line);
+        return false; // Graceful degradation, don't crash
+    }
 }
 ```
 
-### 3. Thread-Safe UI Updates
-```csharp
-/// <summary>
-/// Logs a message in a thread-safe manner
-/// </summary>
-/// <param name="line">Message to log</param>
-public void Log(string line)
-{ 
-    if (InvokeRequired)
-    { 
-        BeginInvoke(new Action<string>(Log), line); 
-        return;
-    } 
-    
-    // Update UI on correct thread
-}
-```
+### Resource Management
+**Proper disposal patterns:**
 
-## Data Modeling Standards
-
-### 1. Immutable Data Transfer Objects
 ```csharp
-/// <summary>
-/// Represents a log entry with immutable properties
-/// </summary>
-/// <param name="Timestamp">When the log entry was created</param>
-/// <param name="Level">Severity level of the log entry</param>
-/// <param name="Message">Log message content</param>
-/// <param name="Exception">Optional exception details</param>
-public record UiLogEntry(
-    DateTime Timestamp, 
-    LogLevel Level, 
-    string Message, 
-    Exception? Exception);
-```
-
-### 2. Configuration Classes
-```csharp
-/// <summary>
-/// Debug and diagnostic configuration settings
-/// </summary>
-public class DebugSettings
+public class TelnetClient : IDisposable
 {
-    public bool TelnetDiagnostics { get; set; } = false;
-    public bool RawEcho { get; set; } = false;
-    // Default values for all settings
+    private readonly TcpClient _client = new();
+    private bool _disposed;
+
+    public void Dispose()
+    {
+        if (_disposed) return;
+        
+        _client?.Close();
+        _client?.Dispose();
+        _disposed = true;
+    }
 }
 ```
 
-### 3. Rich Domain Models
-```csharp
-/// <summary>
-/// Complete player profile containing all game state
-/// </summary>
-public class PlayerProfile
-{
-    public PlayerState Player { get; set; } = new();
-    public StatusEffects Effects { get; set; } = new();
-    public FeatureFlags Features { get; set; } = new();
-    // Composed of related sub-models
-}
-```
+## Security Best Practices
 
-## Performance Considerations
-
-### 1. Lazy Initialization
-```csharp
-// Null until needed
-private static byte[]? _keyCache;
-```
-
-### 2. Object Pooling
-```csharp
-// Reuse concurrent queue for performance
-private readonly ConcurrentQueue<byte> _outQueue = new();
-```
-
-### 3. Efficient Parsing
-```csharp
-// Pre-compiled regex for performance
-private static readonly Regex StatsPattern = new(
-    @"\[Hp=\d+/Mp=\d+/Mv=\d+(?:/At=\d+)?(?:/Ac=\d+)?\]",
-    RegexOptions.Compiled | RegexOptions.IgnoreCase);
-```
-
-## Testing Strategy
-
-### Test Structure (Inferred)
-- Unit tests for core business logic
-- Integration tests for telnet communication
-- UI tests for form interactions
-- Performance tests for real-time parsing
-
-### Testable Design
-- Dependency injection ready (constructor parameters)
-- Interface-based abstractions where needed
-- Pure functions for parsing logic
-- Event-driven architecture enables testing
-
-## Security Practices
-
-### 1. Credential Protection
+### Data Protection
 ```csharp
 /// <summary>
 /// Encrypts sensitive data using Windows DPAPI
 /// </summary>
-/// <param name="plain">Plain text to encrypt</param>
+/// <param name="plainText">Plain text to encrypt</param>
 /// <returns>Encrypted byte array</returns>
-private byte[] Protect(string plain)
+private byte[] Protect(string plainText)
+{
+    var data = Encoding.UTF8.GetBytes(plainText);
+    return ProtectedData.Protect(data, null, DataProtectionScope.CurrentUser);
+}
 
 /// <summary>
 /// Decrypts protected data
@@ -531,9 +328,13 @@ private byte[] Protect(string plain)
 /// <param name="protectedData">Encrypted byte array</param>
 /// <returns>Decrypted plain text</returns>
 private string Unprotect(byte[] protectedData)
+{
+    var data = ProtectedData.Unprotect(protectedData, null, DataProtectionScope.CurrentUser);
+    return Encoding.UTF8.GetString(data);
+}
 ```
 
-### 2. Input Validation
+### Input Validation
 ```csharp
 if (string.IsNullOrWhiteSpace(username) || string.IsNullOrWhiteSpace(password))
 {
@@ -542,7 +343,7 @@ if (string.IsNullOrWhiteSpace(username) || string.IsNullOrWhiteSpace(password))
 }
 ```
 
-### 3. Safe Parsing
+### Safe Parsing
 ```csharp
 // No exceptions on invalid input
 if (int.TryParse(m.Groups["hp"].Value, out var hp))
@@ -553,7 +354,7 @@ if (int.TryParse(m.Groups["hp"].Value, out var hp))
 
 ## Documentation Standards
 
-### 1. XML Documentation
+### XML Documentation
 ```csharp
 /// <summary>
 /// Core combat tracking service that monitors damage, deaths, and experience
@@ -562,13 +363,13 @@ if (int.TryParse(m.Groups["hp"].Value, out var hp))
 public CombatTracker(RoomTracker? roomTracker = null)
 ```
 
-### 2. Inline Comments
+### Inline Comments
 ```csharp
 // Track if we've seen first stats line to trigger initial commands
 private bool _hasSeenFirstStats = false;
 ```
 
-### 3. Region Organization
+### Region Organization
 ```csharp
 #region Combat Statistics Methods
 // Related methods grouped together
@@ -577,26 +378,27 @@ private bool _hasSeenFirstStats = false;
 
 ## Dependency Management
 
-### 1. External Packages
+### External Packages
 - **MoonSharp**: Lua scripting engine for automation
 - **Microsoft.Extensions.Logging**: Structured logging
 - **System.Security.Cryptography.ProtectedData**: Credential encryption
+- **CommunityToolkit.Mvvm**: MVVM helpers for WPF
 
-### 2. Internal Dependencies
+### Internal Dependencies
 - Core project has no UI dependencies
-- CLI project references Core project only
-- Clear unidirectional dependency flow
+- WPF project references Core project only  
+- Clear unidirectional dependency flow: WPF → Core
 
 ## Extension Points
 
-### 1. Scripting System
+### Scripting System
 ```csharp
 _script.Globals["onMatch"] = (Action<string, DynValue>)((pattern, func) => {
     // User-defined automation scripts
 });
 ```
 
-### 2. Rule Engine
+### Rule Engine
 ```csharp
 /// <summary>
 /// Adds a new automation rule
@@ -609,7 +411,7 @@ public void Add(string pattern, Action<Match> callback)
 }
 ```
 
-### 3. Combat Tracking
+### Combat Tracking
 ```csharp
 /// <summary>
 /// Processes a line for combat events
@@ -622,20 +424,30 @@ public bool ProcessLine(string line)
 }
 ```
 
-## Best Practices Summary
+## File Organization Checklist
 
-1. **Code Formatting**: Use consistent spacing, commenting, and line breaks
-2. **Documentation**: XML docs for all public APIs, inline comments for complex logic
-3. **Immutability**: Prefer readonly fields and immutable data structures
-4. **Thread Safety**: Always use locks for shared mutable state
-5. **Error Handling**: Graceful degradation with logging, avoid crashes
-6. **Resource Management**: Proper disposal patterns and cleanup
-7. **Event-Driven**: Loose coupling through events and observers
-8. **Separation of Concerns**: Clear boundaries between layers
-9. **Performance**: Pre-compile regex, reuse objects, efficient collections
-10. **Security**: Encrypt sensitive data, validate all inputs
-11. **Testability**: Constructor injection, pure functions, mockable interfaces
-12. **Readability**: Clear method names, proper spacing, meaningful comments
+Before creating or modifying files, ensure:
+
+- [ ] **Single Responsibility**: Each class has one clear purpose
+- [ ] **Appropriate Size**: Files stay under recommended line limits
+- [ ] **Logical Grouping**: Related functionality is co-located
+- [ ] **Clear Dependencies**: Dependencies flow in one direction
+- [ ] **Namespace Alignment**: File location matches namespace structure
+
+## Implementation Checklist
+
+Before implementing features:
+
+- [ ] **Verify existing functionality** - search codebase thoroughly
+- [ ] **Follow established patterns** - check how similar features are implemented
+- [ ] **Implement only what's requested** - no additional unrequested features
+- [ ] **Check file sizes** - split large classes into focused components
+- [ ] **Use dependency injection** - constructor-based injection preferred
+- [ ] **Add proper logging** - use ILogger with structured logging
+- [ ] **Handle exceptions gracefully** - never crash the application
+- [ ] **Include XML documentation** - document all public APIs
+- [ ] **Follow thread safety rules** - protect shared mutable state
+- [ ] **Validate inputs** - never trust external data
 
 ## Code Review Checklist
 
@@ -651,5 +463,8 @@ Before submitting code, ensure:
 - [ ] Resource disposal implemented where applicable
 - [ ] Input validation for public methods
 - [ ] Performance considerations addressed
+- [ ] File sizes remain manageable for LLM processing
+- [ ] No assumptions about non-existent functionality
+- [ ] Follows established project patterns
 
-When contributing to this project, follow these established patterns and maintain consistency with the existing codebase architecture.
+When contributing to this project, follow these established patterns and maintain consistency with the existing codebase architecture. **Always verify existing functionality before implementing new features, and keep file sizes manageable by splitting complex logic into focused, single-responsibility classes.**
