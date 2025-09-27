@@ -216,6 +216,7 @@ public class CombatLineParser
 
     /// <summary>
     /// Parse experience and track the difference to calculate actual gains
+    /// Enhanced to handle first-time XP and provide better debugging
     /// </summary>
     public bool TryParseExperience(string line, out int experienceGained, int lastCurrentExperience, int lastExperienceLeft)
     {
@@ -228,24 +229,65 @@ public class CombatLineParser
         if (int.TryParse(match.Groups["current"].Value, out var current) &&
             int.TryParse(match.Groups["left"].Value, out var left))
         {
+            // Debug: Log the XP line and parsing
+            System.Diagnostics.Debug.WriteLine($"?? XP PARSING: Line='{line}' Current={current} Left={left} LastCurrent={lastCurrentExperience} LastLeft={lastExperienceLeft}");
+
             // If we have previous experience data, calculate the actual gain
             if (lastCurrentExperience >= 0 && lastExperienceLeft >= 0)
             {
-                // Experience gained = difference in current experience
-                experienceGained = current - lastCurrentExperience;
+                // Primary calculation: difference in current experience
+                var currentDiff = current - lastCurrentExperience;
+                
+                // Alternative calculation: difference in left field (should be negative when we gain XP)
+                var leftDiff = lastExperienceLeft - left;
 
-                // Sanity check - if gain seems too large or negative, use left field difference
-                if (experienceGained <= 0 || experienceGained > 10000)
+                System.Diagnostics.Debug.WriteLine($"?? XP CALCULATION: CurrentDiff={currentDiff} LeftDiff={leftDiff}");
+
+                // Use the most reliable calculation
+                if (currentDiff > 0 && currentDiff <= 50000) // Increased upper limit for high-level gains
                 {
-                    // Alternative calculation using "left" field
-                    experienceGained = lastExperienceLeft - left;
+                    // Current experience increased by a reasonable amount
+                    experienceGained = currentDiff;
+                    System.Diagnostics.Debug.WriteLine($"?? XP GAIN (current): {experienceGained} XP");
+                    return true;
+                }
+                else if (leftDiff > 0 && leftDiff <= 50000) // Increased upper limit
+                {
+                    // Left experience decreased by a reasonable amount
+                    experienceGained = leftDiff;
+                    System.Diagnostics.Debug.WriteLine($"?? XP GAIN (left): {experienceGained} XP");
+                    return true;
+                }
+                else if (currentDiff == 0 && leftDiff == 0)
+                {
+                    // Same values - no experience change
+                    System.Diagnostics.Debug.WriteLine($"?? XP NO CHANGE: Same values as before");
+                    return false;
+                }
+                else
+                {
+                    // Values changed but not in expected way - might be level up, quest reward, etc.
+                    System.Diagnostics.Debug.WriteLine($"?? XP UNUSUAL CHANGE: CurrentDiff={currentDiff} LeftDiff={leftDiff} (might be level up or large reward)");
+                    
+                    // For very large positive changes, consider it valid XP
+                    if (currentDiff > 0)
+                    {
+                        experienceGained = Math.Min(currentDiff, 100000); // Cap at 100k for sanity
+                        System.Diagnostics.Debug.WriteLine($"?? XP LARGE GAIN: {experienceGained} XP (capped from {currentDiff})");
+                        return true;
+                    }
+                    return false;
                 }
             }
-
-            // If we couldn't calculate a gain, return false but still update tracking
-            return experienceGained > 0;
+            else
+            {
+                // First time seeing XP data - store for next comparison but no gain to report
+                System.Diagnostics.Debug.WriteLine($"?? XP BASELINE SET: Current={current} Left={left} (first XP line - no gain calculated)");
+                return false;
+            }
         }
 
+        System.Diagnostics.Debug.WriteLine($"?? XP PARSE FAILED: Could not parse numbers from '{line}'");
         return false;
     }
 

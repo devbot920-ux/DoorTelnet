@@ -94,9 +94,28 @@ public class CombatViewModel : ViewModelBase
             {
                 ActiveCombats.Remove(active);
             }
-            CompletedCombats.Add(CombatEntryDisplay.From(entry));
-            // cap list size
-            while (CompletedCombats.Count > 250) CompletedCombats.RemoveAt(0);
+            
+            // Check if we already have an entry for this combat (might be XP update)
+            var existingCompleted = CompletedCombats.FirstOrDefault(c => 
+                c.MonsterName.Equals(entry.MonsterName, StringComparison.OrdinalIgnoreCase) &&
+                c.StartTime == entry.StartTime);
+            
+            if (existingCompleted != null)
+            {
+                // Update the existing entry with new XP information
+                existingCompleted.ExperienceGained = entry.ExperienceGained;
+                System.Diagnostics.Debug.WriteLine($"?? UI UPDATED: Updated existing combat entry '{entry.MonsterName}' with {entry.ExperienceGained} XP");
+            }
+            else
+            {
+                // Add new entry
+                CompletedCombats.Add(CombatEntryDisplay.From(entry));
+                System.Diagnostics.Debug.WriteLine($"?? UI ADDED: New combat entry '{entry.MonsterName}' with {entry.ExperienceGained} XP");
+                
+                // cap list size
+                while (CompletedCombats.Count > 250) CompletedCombats.RemoveAt(0);
+            }
+            
             UpdateStats();
             (ExportCsvCommand as RelayCommand)?.NotifyCanExecuteChanged();
         });
@@ -198,18 +217,38 @@ public class CombatViewModel : ViewModelBase
         };
     }
 
-    public class CombatEntryDisplay
+    public class CombatEntryDisplay : ObservableObject
     {
-        public string MonsterName { get; set; } = string.Empty;
-        public int DamageDealt { get; set; }
-        public int DamageTaken { get; set; }
-        public int ExperienceGained { get; set; }
-        public double DurationSeconds { get; set; }
-        public double DpsDealt { get; set; }
-        public double DpsTaken { get; set; }
-        public string Status { get; set; } = string.Empty;
-        public DateTime StartTime { get; set; }
-        public DateTime? EndTime { get; set; }
+        private string _monsterName = string.Empty; 
+        public string MonsterName { get => _monsterName; set => SetProperty(ref _monsterName, value); }
+        
+        private int _damageDealt; 
+        public int DamageDealt { get => _damageDealt; set => SetProperty(ref _damageDealt, value); }
+        
+        private int _damageTaken; 
+        public int DamageTaken { get => _damageTaken; set => SetProperty(ref _damageTaken, value); }
+        
+        private int _experienceGained; 
+        public int ExperienceGained { get => _experienceGained; set => SetProperty(ref _experienceGained, value); }
+        
+        private double _durationSeconds; 
+        public double DurationSeconds { get => _durationSeconds; set => SetProperty(ref _durationSeconds, value); }
+        
+        private double _dpsDealt; 
+        public double DpsDealt { get => _dpsDealt; set => SetProperty(ref _dpsDealt, value); }
+        
+        private double _dpsTaken; 
+        public double DpsTaken { get => _dpsTaken; set => SetProperty(ref _dpsTaken, value); }
+        
+        private string _status = string.Empty; 
+        public string Status { get => _status; set => SetProperty(ref _status, value); }
+        
+        private DateTime _startTime; 
+        public DateTime StartTime { get => _startTime; set => SetProperty(ref _startTime, value); }
+        
+        private DateTime? _endTime; 
+        public DateTime? EndTime { get => _endTime; set => SetProperty(ref _endTime, value); }
+        
         public static CombatEntryDisplay From(CombatEntry e) => new()
         {
             MonsterName = e.MonsterName,

@@ -102,6 +102,7 @@ public partial class App : Application
                         if ((DateTime.UtcNow - lastXpSent).TotalMilliseconds < 700) return;
                         lastXpSent = DateTime.UtcNow;
                         client.SendCommand("xp");
+                        logger.LogDebug("XP requested after combat event");
                     };
 
                     bool initialCommandsSent = false;
@@ -112,8 +113,20 @@ public partial class App : Application
                         client.SendCommand("stats");
                         client.SendCommand("spells");
                         client.SendCommand("inv");
-                        client.SendCommand("xp");
+                        client.SendCommand("xp"); // Initial XP request
                         logger.LogInformation("Initial data commands dispatched (inv, st2, stats, spells, inv, xp)");
+                        
+                        // Request XP again after a short delay to ensure we capture it
+                        _ = System.Threading.Tasks.Task.Run(async () =>
+                        {
+                            await System.Threading.Tasks.Task.Delay(2000);
+                            if ((DateTime.UtcNow - lastXpSent).TotalMilliseconds >= 1500)
+                            {
+                                lastXpSent = DateTime.UtcNow;
+                                client.SendCommand("xp");
+                                logger.LogDebug("Follow-up XP request after initial commands");
+                            }
+                        });
                     }
                     void TrySendInitial()
                     {
@@ -318,15 +331,21 @@ public partial class App : Application
                                 ParseScreenSnapshot();
                             }
 
-                            if (!initialCommandsSent)
+                            // Enhanced XP processing - check every line for XP information
+                            var xpMatch = Regex.Match(line, @"\[Cur:\s*(?<cur>\d+)\s+Nxt:\s*(?<nxt>\d+)\s+Left:\s*(?<left>\d+)\]", RegexOptions.IgnoreCase);
+                            if (xpMatch.Success)
                             {
-                                var chk = line.Trim();
-                                if (chk.StartsWith("Exits:", StringComparison.OrdinalIgnoreCase) ||
-                                    chk.IndexOf("You rejoin the world", StringComparison.OrdinalIgnoreCase) >= 0 ||
-                                    chk.StartsWith("Welcome", StringComparison.OrdinalIgnoreCase))
+                                if (long.TryParse(xpMatch.Groups["cur"].Value, out var curXp)) 
                                 {
-                                    TrySendInitial();
+                                    profile.SetExperience(curXp);
+                                    logger.LogDebug("XP updated from line: Current={currentXp}", curXp);
                                 }
+                                if (long.TryParse(xpMatch.Groups["left"].Value, out var leftXp)) 
+                                {
+                                    profile.SetXpLeft(leftXp);
+                                    logger.LogDebug("XP Left updated from line: Left={leftXp}", leftXp);
+                                }
+                                PersistCharacterIfNew();
                             }
 
                             var screen = screenField?.GetValue(script) as ScreenBuffer;

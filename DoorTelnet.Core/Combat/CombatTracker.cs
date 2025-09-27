@@ -14,7 +14,7 @@ public class CombatTracker
 {
     private readonly object _sync = new();
     private readonly List<CombatEntry> _completedCombats = new();
-    private readonly Dictionary<string, ActiveCombat> _activeCombats = new();
+    private readonly Dictionary<string, ActiveCombat> _activeCombats;
     private readonly List<ActiveCombat> _combatsAwaitingExperience = new();
     private readonly TimeSpan _combatTimeout = TimeSpan.FromMinutes(2);
     private readonly TimeSpan _experienceTimeout = TimeSpan.FromSeconds(30);
@@ -45,6 +45,9 @@ public class CombatTracker
         _roomTracker = roomTracker;
         _lineParser = new CombatLineParser(roomTracker);
         _nameResolver = new MonsterNameResolver(roomTracker);
+        
+        // Make the active combats dictionary case-insensitive to prevent duplicates
+        _activeCombats = new Dictionary<string, ActiveCombat>(StringComparer.OrdinalIgnoreCase);
     }
 
     public IReadOnlyList<CombatEntry> CompletedCombats
@@ -114,6 +117,23 @@ public class CombatTracker
         
         bool foundCombatEvent = false;
 
+        // NEW: Detect summoned monsters and ensure they're tracked
+        if (cleanedLine.Contains("summoned for combat", StringComparison.OrdinalIgnoreCase))
+        {
+            var summonMatch = Regex.Match(cleanedLine, @"A\s+([a-zA-Z\s]+?)\s+is\s+summoned\s+for\s+combat", RegexOptions.IgnoreCase);
+            if (summonMatch.Success)
+            {
+                var monsterName = summonMatch.Groups[1].Value.Trim();
+                System.Diagnostics.Debug.WriteLine($"?? SUMMONED MONSTER DETECTED: '{monsterName}' - ensuring combat tracking");
+                
+                // Ensure the monster is tracked and marked as aggressive
+                EnsureMonsterTracked(monsterName);
+                MarkMonsterAsAggressive(monsterName);
+                
+                foundCombatEvent = true;
+            }
+        }
+
         // Handle "You suffered" damage with previous line context
         if (_previousCleanLine != null && cleanedLine.Contains("You suffered", StringComparison.OrdinalIgnoreCase))
         {
@@ -161,6 +181,12 @@ public class CombatTracker
             AssignExperienceToRecentCombats(experience); 
             foundCombatEvent = true; 
         }
+        else if (cleanedLine.Contains("[Cur:", StringComparison.OrdinalIgnoreCase))
+        {
+            // Even if we can't calculate a gain, update our tracking for next time
+            UpdateExperienceTracking(cleanedLine);
+            System.Diagnostics.Debug.WriteLine($"?? XP LINE PROCESSED (no gain calculated): '{cleanedLine}'");
+        }
         
         return foundCombatEvent;
     }
@@ -176,6 +202,8 @@ public class CombatTracker
                 _lastCurrentExperience = current;
             if (int.TryParse(match.Groups["left"].Value, out var left))
                 _lastExperienceLeft = left;
+                
+            System.Diagnostics.Debug.WriteLine($"?? XP TRACKING UPDATED: Current={_lastCurrentExperience} Left={_lastExperienceLeft}");
         }
     }
 
@@ -436,21 +464,42 @@ public class CombatTracker
         lock (_sync)
         {
             // Look for recently completed combats that haven't been assigned XP yet
+            // Order by END TIME (when combat actually finished) to get the most recent death, not the most recent start
             var recentCompletedCombats = _completedCombats
                 .Where(c => c.ExperienceGained == 0 && // No XP assigned yet
                            c.EndTime.HasValue &&
                            (DateTime.UtcNow - c.EndTime.Value) <= _experienceTimeout)
-                .OrderBy(c => c.EndTime)
+                .OrderByDescending(c => c.EndTime) // Most recent death FIRST, not last
                 .ToList();
 
             if (recentCompletedCombats.Count > 0)
             {
-                var targetCombat = recentCompletedCombats.Last();
+                var targetCombat = recentCompletedCombats.First(); // Take the FIRST (most recent death)
                 
-                // Assign XP to the most recent combat
+                // Assign XP to the most recent combat death
                 targetCombat.ExperienceGained = experience;
                 
-                System.Diagnostics.Debug.WriteLine($"?? XP ASSIGNED: {experience} XP assigned to completed combat '{targetCombat.MonsterName}'");
+                System.Diagnostics.Debug.WriteLine($"?? XP ASSIGNED: {experience} XP assigned to completed combat '{targetCombat.MonsterName}' (combat ended {(DateTime.UtcNow - (targetCombat.EndTime ?? DateTime.UtcNow)).TotalSeconds:F1}s ago)");
+                
+                // Fire completion event again to trigger UI update with the XP value
+                CombatCompleted?.Invoke(targetCombat);
+            }
+            else
+            {
+                System.Diagnostics.Debug.WriteLine($"?? XP GAINED (no recent combat): {experience} XP - likely from login, quest, or other source");
+                
+                // Log the recent combats for debugging
+                var allRecent = _completedCombats
+                    .Where(c => c.EndTime.HasValue && (DateTime.UtcNow - c.EndTime.Value) <= TimeSpan.FromMinutes(2))
+                    .OrderByDescending(c => c.EndTime)
+                    .Take(5)
+                    .ToList();
+                    
+                foreach (var combat in allRecent)
+                {
+                    var timeSinceEnd = combat.EndTime.HasValue ? (DateTime.UtcNow - combat.EndTime.Value).TotalSeconds : -1;
+                    System.Diagnostics.Debug.WriteLine($"   Recent combat: '{combat.MonsterName}' ended {timeSinceEnd:F1}s ago, XP={combat.ExperienceGained}");
+                }
             }
             
             // Clean up old targeting entries that are no longer needed

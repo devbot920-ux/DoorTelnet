@@ -27,7 +27,7 @@ public class CombatTextProcessor
     };
 
     /// <summary>
-    /// Clean line content - now simplified since TelnetClient handles ANSI and stats processing
+    /// Clean line content and detect if this is the first stats line (triggers initial commands)
     /// </summary>
     public string CleanLineContent(string line, bool hasSeenFirstStats, out bool triggersInitialCommands)
     {
@@ -40,7 +40,7 @@ public class CombatTextProcessor
 
         // TelnetClient should have already cleaned all ANSI sequences - this is just a safety net
         var beforeBackupClean = line;
-        line = Regex.Replace(line, @"\x1B\[[0-9;]*[a-zA-Z]", "");
+        line = Regex.Replace(line, @"\x1B\[[0-9;]*[a-zA-Z]", "", RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
         // Log if we found ANSI content that TelnetClient missed (indicates a problem)
         if (beforeBackupClean != line && beforeBackupClean.Length > 0)
@@ -48,11 +48,12 @@ public class CombatTextProcessor
             System.Diagnostics.Debug.WriteLine($"??? COMBAT ANSI CLEANING TRIGGERED: '{beforeBackupClean}' -> '{line}' (TelnetClient should have handled this!)");
         }
 
-        // Check if this is the first stats line we've seen (trigger initial commands)
-        // Use original line since TelnetClient should have preserved XP lines properly
+        // NEW: Check if this is the first stats line we've seen (trigger initial commands)
+        // This detects when we've entered the game by seeing our first stats line
         if (!hasSeenFirstStats && StatsPattern.IsMatch(originalLine))
         {
             triggersInitialCommands = true;
+            System.Diagnostics.Debug.WriteLine($"??? FIRST STATS LINE DETECTED - triggering initial commands: '{originalLine}'");
         }
 
         // TelnetClient should have already handled stats removal while preserving XP lines

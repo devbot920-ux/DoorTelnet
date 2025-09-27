@@ -186,6 +186,7 @@ public class MonsterNameResolver
 
     /// <summary>
     /// Normalize monster names for consistent tracking
+    /// Keep original casing to match what appears in game text exactly
     /// </summary>
     public string NormalizeMonsterName(string name)
     {
@@ -208,13 +209,8 @@ public class MonsterNameResolver
         // Remove trailing punctuation
         normalized = normalized.TrimEnd('.', '!', '?', ',');
 
-        // Convert to title case for consistency
-        if (normalized.Length > 0)
-        {
-            normalized = char.ToUpperInvariant(normalized[0]) +
-                        (normalized.Length > 1 ? normalized.Substring(1).ToLowerInvariant() : "");
-        }
-
+        // Keep the original casing from the game text - don't force title case
+        // This prevents issues with case-sensitive dictionaries
         return normalized;
     }
 }
