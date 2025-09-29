@@ -74,6 +74,13 @@ public partial class App : Application
                 services.AddSingleton(sp => new CharacterProfileStore(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "DoorTelnet", "characters.json")));
                 services.AddSingleton<UserSelectionService>();
 
+                // Navigation services (Phase 1 & 2)
+                services.AddSingleton<DoorTelnet.Core.Navigation.Services.GraphDataService>();
+                services.AddSingleton<DoorTelnet.Core.Navigation.Services.PathfindingService>();
+                services.AddSingleton<DoorTelnet.Core.Navigation.Services.RoomMatchingService>();
+                services.AddSingleton<DoorTelnet.Core.Navigation.Services.MovementQueueService>();
+                services.AddSingleton<DoorTelnet.Core.Navigation.Services.NavigationService>();
+
                 services.AddSingleton<TelnetClient>(sp =>
                 {
                     var cfg = sp.GetRequiredService<IConfiguration>();
@@ -86,12 +93,22 @@ public partial class App : Application
                     var diagnostics = bool.TryParse(cfg["diagnostics:telnet"], out var d) && d;
                     var raw = bool.TryParse(cfg["diagnostics:rawEcho"], out var re) && re;
                     var dumb = bool.TryParse(cfg["diagnostics:dumbMode"], out var dm) && dm;
+                    var combatDebug = bool.TryParse(cfg["diagnostics:combatCleaning"], out var cd) && cd;
+                    var roomDebug = bool.TryParse(cfg["diagnostics:roomCleaning"], out var rd) && rd;
+                    
+                    // Configure debug logging
+                    DoorTelnet.Core.Combat.CombatLineParser.SetDebugLogging(combatDebug);
+                    DoorTelnet.Core.World.RoomTextProcessor.SetDebugLogging(roomDebug);
+
                     var roomTracker = sp.GetRequiredService<RoomTracker>();
                     var combatTracker = sp.GetRequiredService<CombatTracker>();
-                    var roomVm = sp.GetRequiredService<RoomViewModel>();
+                    // REMOVED: var roomVm = sp.GetRequiredService<RoomViewModel>(); // This causes circular dependency!
                     var userSelection = sp.GetRequiredService<UserSelectionService>();
                     var characterStore = sp.GetRequiredService<CharacterProfileStore>();
-                    roomTracker.RoomChanged += _ => Current?.Dispatcher.BeginInvoke(roomVm.Refresh);
+                    
+                    // REMOVED: roomTracker.RoomChanged += _ => Current?.Dispatcher.BeginInvoke(roomVm.Refresh);
+                    // This subscription will be handled in MainWindow registration where RoomViewModel is available
+                    
                     var screenField = typeof(ScriptEngine).GetField("_screen", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
 
                     var client = new TelnetClient(cols, rows, script, rules, logger, diagnostics, raw, dumb, stats);
@@ -317,7 +334,7 @@ public partial class App : Application
                             // Minimal single-line fallback for name/class if not yet set
                             if (profile.Player.Name.Length == 0 || profile.Player.Class.Length == 0)
                             {
-                                var mc = Regex.Match(line, @"Name\s*:?\s*(?<nm>[A-Za-z][A-Za-z]+).{0,40}Class\s*:?\s*(?<cls>[A-Za-z]+)", RegexOptions.IgnoreCase);
+                                var mc = Regex.Match(line, @"Name\s*:?\s*(?<nm>[A-Za-z][A-ZaZ]+).{0,40}Class\s*:?\s*(?<cls>[A-Za-z]+)", RegexOptions.IgnoreCase);
                                 if (mc.Success)
                                 {
                                     profile.SetNameClass(mc.Groups["nm"].Value.Trim(), mc.Groups["cls"].Value.Trim());
@@ -379,6 +396,9 @@ public partial class App : Application
                     return new AutomationFeatureService(stats, profile, client, room, combat, charStore, logger);
                 });
 
+                // Navigation feature service (Phase 3)
+                services.AddSingleton<NavigationFeatureService>();
+                
                 // ViewModels / dialogs
                 services.AddTransient<SettingsViewModel>();
                 services.AddTransient<CredentialsViewModel>();
@@ -387,7 +407,14 @@ public partial class App : Application
                 services.AddTransient<HotKeysViewModel>();
 
                 services.AddSingleton<StatsViewModel>();
-                services.AddSingleton<RoomViewModel>();
+                services.AddSingleton<RoomViewModel>(sp =>
+                {
+                    var roomTracker = sp.GetRequiredService<RoomTracker>();
+                    var logger = sp.GetRequiredService<ILogger<RoomViewModel>>();
+                    var navigationService = sp.GetRequiredService<NavigationFeatureService>();
+                    var roomMatchingService = sp.GetRequiredService<DoorTelnet.Core.Navigation.Services.RoomMatchingService>();
+                    return new RoomViewModel(roomTracker, logger, navigationService, roomMatchingService);
+                });
                 services.AddSingleton<CombatViewModel>();
                 services.AddSingleton<MainViewModel>();
 
@@ -400,6 +427,48 @@ public partial class App : Application
                     
                     // Create AutomationFeatureService which will start generating log entries
                     _ = sp.GetRequiredService<AutomationFeatureService>();
+                    
+                    // Set up the RoomTracker -> RoomViewModel connection now that both services exist
+                    var roomTracker = sp.GetRequiredService<RoomTracker>();
+                    var roomVm = sp.GetRequiredService<RoomViewModel>();
+                    roomTracker.RoomChanged += _ => Current?.Dispatcher.BeginInvoke(roomVm.Refresh);
+                    
+                    // Initialize navigation graph data
+                    _ = Task.Run(async () =>
+                    {
+                        try
+                        {
+                            var graphService = sp.GetRequiredService<DoorTelnet.Core.Navigation.Services.GraphDataService>();
+                            var graphPath = Path.Combine(AppContext.BaseDirectory, "graph.json");
+                            
+                            if (File.Exists(graphPath))
+                            {
+                                var logger = sp.GetRequiredService<ILogger<App>>();
+                                logger.LogInformation("Loading navigation graph data...");
+                                
+                                var success = await graphService.LoadGraphDataAsync(graphPath);
+                                if (success)
+                                {
+                                    logger.LogInformation("Navigation graph loaded successfully: {NodeCount} nodes, {EdgeCount} edges", 
+                                        graphService.NodeCount, graphService.EdgeCount);
+                                }
+                                else
+                                {
+                                    logger.LogWarning("Failed to load navigation graph data");
+                                }
+                            }
+                            else
+                            {
+                                var logger = sp.GetRequiredService<ILogger<App>>();
+                                logger.LogWarning("Graph data file not found: {GraphPath}", graphPath);
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            var logger = sp.GetRequiredService<ILogger<App>>();
+                            logger.LogError(ex, "Error loading navigation graph data");
+                        }
+                    });
                     
                     var w = new MainWindow { DataContext = sp.GetRequiredService<MainViewModel>(), LogVm = sp.GetRequiredService<LogViewModel>() };
                     var settings = sp.GetRequiredService<ISettingsService>();

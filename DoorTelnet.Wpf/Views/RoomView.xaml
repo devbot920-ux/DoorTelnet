@@ -2,6 +2,10 @@
     <StackPanel>
         <TextBlock Text="Room" FontWeight="Bold" FontSize="14" />
         <TextBlock Text="{Binding RoomName}" FontWeight="SemiBold" TextWrapping="Wrap" Margin="0 2 0 6" />
+        
+        <!-- Room ID -->
+        <TextBlock Text="Room ID" FontWeight="Bold" FontSize="11" Margin="0 0 0 2" />
+        <TextBlock Text="{Binding RoomId}" FontSize="10" Foreground="#CCC" Margin="0 0 0 6" />
 
         <TextBlock Text="Exits" FontWeight="Bold" />
         <ItemsControl ItemsSource="{Binding Exits}" Margin="0 2 0 6">
@@ -44,13 +48,97 @@
         </ItemsControl>
 
         <TextBlock Text="Items" FontWeight="Bold" />
-        <ItemsControl ItemsSource="{Binding Items}" Margin="0 2 0 0">
+        <ItemsControl ItemsSource="{Binding Items}" Margin="0 2 0 8">
             <ItemsControl.ItemTemplate>
                 <DataTemplate>
                     <TextBlock Text="{Binding}" />
                 </DataTemplate>
             </ItemsControl.ItemTemplate>
         </ItemsControl>
+
+        <!-- Navigation Section (moved to bottom) -->
+        <TextBlock Text="Navigation" FontWeight="Bold" Margin="0 8 0 2" />
+        <Grid Margin="0 2 0 6">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
+            </Grid.RowDefinitions>
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="Auto"/>
+            </Grid.ColumnDefinitions>
+            
+            <!-- Autocomplete Navigation ComboBox -->
+            <ComboBox Grid.Row="0" Grid.Column="0" 
+                      Text="{Binding NavigationDestination, UpdateSourceTrigger=PropertyChanged}" 
+                      ItemsSource="{Binding NavigationSuggestions}"
+                      SelectedItem="{Binding SelectedSuggestion}"
+                      IsDropDownOpen="{Binding IsDropDownOpen, Mode=TwoWay}"
+                      IsEditable="True"
+                      IsTextSearchEnabled="False"
+                      FontSize="11" Margin="0 0 4 2"
+                      ToolTip="Enter room name, room ID, or 'store' to find nearby stores"
+                      Loaded="ComboBox_Loaded">
+                <ComboBox.ItemTemplate>
+                    <DataTemplate>
+                        <Grid Margin="4,2">
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                            </Grid.RowDefinitions>
+                            
+                            <!-- Main suggestion text -->
+                            <TextBlock Grid.Row="0" 
+                                       Text="{Binding DisplayText}" 
+                                       FontSize="11" 
+                                       FontWeight="SemiBold"
+                                       Foreground="{StaticResource Brush.Text}"/>
+                            
+                            <!-- Room ID subtitle -->
+                            <TextBlock Grid.Row="1" 
+                                       Text="{Binding RoomId, StringFormat='Room ID: {0}'}" 
+                                       FontSize="9" 
+                                       Foreground="{StaticResource Brush.TextMuted}" 
+                                       Margin="0,1,0,0"/>
+                        </Grid>
+                    </DataTemplate>
+                </ComboBox.ItemTemplate>
+            </ComboBox>
+            
+            <!-- Navigate button -->
+            <Button Grid.Row="0" Grid.Column="1" 
+                    Content="Go" 
+                    Command="{Binding StartNavigationCommand}"
+                    FontSize="10" Padding="8,2" Margin="2 0"/>
+            
+            <!-- Stop button -->
+            <Button Grid.Row="0" Grid.Column="2" 
+                    Content="Stop" 
+                    Command="{Binding StopNavigationCommand}"
+                    FontSize="10" Padding="8,2" Margin="2 0 0 0"/>
+            
+            <!-- Quick actions row -->
+            <StackPanel Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="3" 
+                        Orientation="Horizontal" Margin="0 2">
+                <Button Content="Find Stores" 
+                        Command="{Binding FindStoresCommand}"
+                        FontSize="9" Padding="6,2" Margin="0 0 4 0"
+                        ToolTip="Find nearby stores within 40 moves"/>
+                <Button Content="Set Pending" 
+                        Command="{Binding SetPendingDestinationCommand}"
+                        FontSize="9" Padding="6,2"
+                        ToolTip="Navigate when safe"/>
+            </StackPanel>
+            
+            <!-- Status display -->
+            <TextBlock Grid.Row="2" Grid.Column="0" Grid.ColumnSpan="3"
+                       Text="{Binding NavigationStatus}" 
+                       FontSize="10" Foreground="#888" 
+                       TextWrapping="Wrap" Margin="0 4 0 0"/>
+        </Grid>
 
         <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0 8 0 0">
             <TextBlock Text="Updated:" FontSize="10" Foreground="#888" />

@@ -23,6 +23,7 @@
 
   <ItemGroup>
     <Content Include="appsettings.json" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="..\graph.json" Link="graph.json" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
 </Project>

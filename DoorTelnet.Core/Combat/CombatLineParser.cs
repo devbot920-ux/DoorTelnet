@@ -33,9 +33,43 @@ public class CombatLineParser
 
     private readonly RoomTracker? _roomTracker;
 
+    // Flag to control debug logging - can be made configurable
+    private static bool _enableDebugLogging = 
+#if DEBUG
+        true;
+#else
+        false;
+#endif
+
+    /// <summary>
+    /// Enables or disables debug logging for combat processing
+    /// </summary>
+    public static void SetDebugLogging(bool enabled)
+    {
+        _enableDebugLogging = enabled;
+    }
+
     public CombatLineParser(RoomTracker? roomTracker = null)
     {
         _roomTracker = roomTracker;
+    }
+
+    /// <summary>
+    /// Centralized punctuation cleaning to avoid duplicate debug messages
+    /// </summary>
+    private static string CleanPunctuation(string line)
+    {
+        var originalLine = line;
+        line = line.Replace("!", "").Replace(".", "").Trim();
+
+        // Log if we had to clean punctuation (indicates TelnetClient might need adjustment)
+        // Only log once per unique line to avoid duplicates
+        if (_enableDebugLogging && originalLine != line && originalLine.Length > 0)
+        {
+            System.Diagnostics.Debug.WriteLine($"?? COMBAT PUNCTUATION CLEANING: '{originalLine}' -> '{line}' (TelnetClient should have handled this!)");
+        }
+
+        return line;
     }
 
     /// <summary>
@@ -46,15 +80,8 @@ public class CombatLineParser
     {
         result = default;
 
-        // Minimal cleanup - TelnetClient should have handled most punctuation
-        var originalLine = line;
-        line = line.Replace("!", "").Replace(".", "").Trim();
-
-        // Log if we had to clean punctuation (indicates TelnetClient might need adjustment)
-        if (originalLine != line && originalLine.Length > 0)
-        {
-            System.Diagnostics.Debug.WriteLine($"??? COMBAT PUNCTUATION CLEANING: '{originalLine}' -> '{line}' (TelnetClient should have handled this!)");
-        }
+        // Clean punctuation centrally to avoid duplicate logging
+        line = CleanPunctuation(line);
 
         // Simple check: starts with "You" and ends with "damage"
         if (!line.StartsWith("You ", StringComparison.OrdinalIgnoreCase) ||
@@ -121,15 +148,8 @@ public class CombatLineParser
     {
         result = default;
 
-        // Minimal cleanup - TelnetClient should have handled most punctuation
-        var originalLine = line;
-        line = line.Replace("!", "").Replace(".", "").Trim();
-
-        // Log if we had to clean punctuation (indicates TelnetClient might need adjustment)
-        if (originalLine != line && originalLine.Length > 0)
-        {
-            System.Diagnostics.Debug.WriteLine($"??? COMBAT PUNCTUATION CLEANING: '{originalLine}' -> '{line}' (TelnetClient should have handled this!)");
-        }
+        // Clean punctuation centrally to avoid duplicate logging
+        line = CleanPunctuation(line);
 
         // Simple check: starts with A/An/The and contains "you" and ends with "damage"
         var startsCorrectly = line.StartsWith("A ", StringComparison.OrdinalIgnoreCase) ||

@@ -10,6 +10,22 @@ namespace DoorTelnet.Core.World;
 /// </summary>
 public static class RoomTextProcessor
 {
+    // Flag to control debug logging - can be made configurable
+    private static bool _enableDebugLogging = 
+#if DEBUG
+        true;
+#else
+        false;
+#endif
+
+    /// <summary>
+    /// Enables or disables debug logging for room text processing
+    /// </summary>
+    public static void SetDebugLogging(bool enabled)
+    {
+        _enableDebugLogging = enabled;
+    }
+
     /// <summary>
     /// Clean room line content for processing
     /// </summary>
@@ -19,18 +35,18 @@ public static class RoomTextProcessor
 
         var originalLine = line;
 
-        // Enhanced raw input logging for debugging
-        if (ShouldLogRawInput())
+        // Enhanced raw input logging for debugging - only when enabled
+        if (_enableDebugLogging && ShouldLogRawInput())
         {
             LogRawInput(originalLine);
         }
 
         var cleanedLine = PerformTextCleaning(line);
 
-        // Log cleaning if it was applied
-        if (originalLine != cleanedLine && ShouldLogCleaning())
+        // Log cleaning if it was applied - only when enabled
+        if (_enableDebugLogging && originalLine != cleanedLine && ShouldLogCleaning())
         {
-            System.Diagnostics.Debug.WriteLine("?? CLEANING APPLIED:");
+            System.Diagnostics.Debug.WriteLine("?? ROOM TEXT CLEANING APPLIED:");
             System.Diagnostics.Debug.WriteLine($"   RAW: '{originalLine}'");
             System.Diagnostics.Debug.WriteLine($"   CLEAN: '{cleanedLine}'");
         }
@@ -100,10 +116,10 @@ public static class RoomTextProcessor
     }
 
     private static bool ShouldLogRawInput() => 
-        // Could be made configurable, for now just log first few lines for debugging
-        true;
+        // Only log when debug logging is enabled and only first few lines for debugging
+        _enableDebugLogging;
 
-    private static bool ShouldLogCleaning() => true;
+    private static bool ShouldLogCleaning() => _enableDebugLogging;
 
     private static void LogRawInput(string originalLine)
     {
@@ -139,7 +155,7 @@ public static class RoomTextProcessor
             }
         }
 
-        System.Diagnostics.Debug.WriteLine($"??? RAW INPUT: '{printableRep}'");
+        System.Diagnostics.Debug.WriteLine($"?? RAW INPUT: '{printableRep}'");
         System.Diagnostics.Debug.WriteLine($"    HEX: {hexRep}");
     }
 
@@ -165,15 +181,18 @@ public static class RoomTextProcessor
         line = Regex.Replace(line, @"\x1B\[[0-9;]*[A-Za-z@]", "", RegexOptions.IgnoreCase);
 
         // Log if we found ANSI content that TelnetClient missed (indicates a problem)
-        if (beforeBackupClean != line && beforeBackupClean.Length > 0)
+        if (_enableDebugLogging && beforeBackupClean != line && beforeBackupClean.Length > 0)
         {
-            System.Diagnostics.Debug.WriteLine($"??? BACKUP ANSI CLEANING TRIGGERED: '{beforeBackupClean}' -> '{line}' (TelnetClient should have handled this!)");
+            System.Diagnostics.Debug.WriteLine($"?? BACKUP ANSI CLEANING TRIGGERED: '{beforeBackupClean}' -> '{line}' (TelnetClient should have handled this!)");
         }
 
         // Movement command filtering (TelnetClient should handle this, but safety net)
         if (Regex.IsMatch(line, @"^\d*[A-Za-z]*[nsewud]$", RegexOptions.IgnoreCase))
         {
-            System.Diagnostics.Debug.WriteLine($"??? MOVEMENT FILTERED IN ROOMTRACKER: '{line}' (TelnetClient should have filtered this)");
+            if (_enableDebugLogging)
+            {
+                System.Diagnostics.Debug.WriteLine($"?? MOVEMENT FILTERED IN ROOMTRACKER: '{line}' (TelnetClient should have filtered this)");
+            }
             return string.Empty;
         }
 
@@ -196,9 +215,9 @@ public static class RoomTextProcessor
         // Final length check
         if (result.Length < 2)
         {
-            if (line != result && line.Length > 2)
+            if (_enableDebugLogging && line != result && line.Length > 2)
             {
-                System.Diagnostics.Debug.WriteLine($"??? FILTERED TOO SHORT: '{result}' (from original: '{line}')");
+                System.Diagnostics.Debug.WriteLine($"?? FILTERED TOO SHORT: '{result}' (from original: '{line}')");
             }
             return string.Empty;
         }

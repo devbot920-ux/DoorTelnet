@@ -189,6 +189,10 @@ public class Thresholds
     public int WarningHealHpPercent { get; set; } = 50;
     // Critical action when CriticalHpPercent is reached
     public string CriticalAction { get; set; } = "stop"; // "stop", "disconnect", "script:{command}"
+    
+    // Navigation thresholds
+    public int NavigationMinHpPercent { get; set; } = 30;
+    public int MaxRoomDangerLevel { get; set; } = 5;
 }
 
 public class FeatureFlags
@@ -202,4 +206,9 @@ public class FeatureFlags
     public bool PickupSilver { get; set; }
     public bool AutoShield { get; set; } // Add auto-shield feature
     public bool AutoHeal { get; set; } // Add auto-heal feature
+    
+    // Navigation feature flags - Enable by default for testing
+    public bool AutoNavigation { get; set; } = true;
+    public bool AvoidDangerousRooms { get; set; } = true;
+    public bool PauseNavigationInCombat { get; set; } = true;
 }

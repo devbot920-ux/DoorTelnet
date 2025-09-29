@@ -41,7 +41,6 @@ public class AutomationFeatureService : IDisposable
     private DateTime _lastAttackReset = DateTime.MinValue;
 
     private readonly Regex _coinRegex = new("(gold|silver) coin", RegexOptions.IgnoreCase | RegexOptions.Compiled);
-    private readonly Regex _mobHereRegex = new(@"(?i)^(?:You see|A|An|The) +([A-Za-z][A-Za-z'\-]+) +(?:is here|stands here|lurks here)\.\s*$");
     private readonly Regex _shieldCastRegex = new(@"(magical shield surrounds you|You are surrounded by a magical shield|You are shielded\.)", RegexOptions.IgnoreCase | RegexOptions.Compiled);
     private readonly Regex _shieldFadeRegex = new(@"(shield fades|magical shield shatters|shield disipated|shield dissipated)", RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
