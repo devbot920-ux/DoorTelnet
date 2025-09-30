@@ -188,7 +188,7 @@ public class Thresholds
     // Warning heal percentage - stops gong and waits for timers before healing
     public int WarningHealHpPercent { get; set; } = 70;
     // Critical action when CriticalHpPercent is reached
-    public string CriticalAction { get; set; } = "stop"; // "stop", "disconnect", "script:{command}"
+    public string CriticalAction { get; set; } = "disconnect"; // "stop", "disconnect", "script:{command}"
     
     // Navigation thresholds
     public int NavigationMinHpPercent { get; set; } = 30;
@@ -210,5 +210,5 @@ public class FeatureFlags
     // Navigation feature flags - Enable by default for testing
     public bool AutoNavigation { get; set; } = true;
     public bool AvoidDangerousRooms { get; set; } = true;
-    public bool PauseNavigationInCombat { get; set; } = true;
+    public bool PauseNavigationInCombat { get; set; } = false; // DISABLED: Allow navigation during combat
 }

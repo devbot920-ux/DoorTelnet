@@ -507,6 +507,62 @@ public class RoomTracker
                 return null;
             }
 
+            // CRITICAL FIX: Preserve existing monster disposition information for current room refreshes
+            // This handles cases like pressing Enter to refresh the room, which should not reset aggressive monsters
+            if (CurrentRoom != null && string.Equals(state.Name, CurrentRoom.Name, StringComparison.OrdinalIgnoreCase))
+            {
+                // Merge monster disposition information from current room
+                var mergedMonsters = new List<MonsterInfo>();
+                foreach (var newMonster in state.Monsters)
+                {
+                    // Look for existing monster with same name
+                    var existingMonster = CurrentRoom.Monsters.FirstOrDefault(m => 
+                        string.Equals(m.Name, newMonster.Name, StringComparison.OrdinalIgnoreCase) ||
+                        string.Equals(m.Name?.Replace(" (summoned)", ""), newMonster.Name, StringComparison.OrdinalIgnoreCase));
+                    
+                    if (existingMonster != null)
+                    {
+                        // Preserve the existing disposition and targeting info
+                        mergedMonsters.Add(new MonsterInfo(
+                            newMonster.Name, 
+                            existingMonster.Disposition, // Keep existing disposition (aggressive/neutral)
+                            existingMonster.TargetingYou, // Keep existing targeting status
+                            newMonster.Count));
+                        
+                        System.Diagnostics.Debug.WriteLine($"?? ROOM REFRESH: Preserved {existingMonster.Disposition} disposition for '{newMonster.Name}'");
+                    }
+                    else
+                    {
+                        // New monster not seen before, use default neutral disposition
+                        mergedMonsters.Add(newMonster);
+                        System.Diagnostics.Debug.WriteLine($"?? ROOM REFRESH: New monster '{newMonster.Name}' added as neutral");
+                    }
+                }
+                
+                // Also preserve monsters that might not be in the new parse but are still aggressive
+                // (e.g., if the room parsing missed them but they're still there)
+                foreach (var currentMonster in CurrentRoom.Monsters)
+                {
+                    if (!mergedMonsters.Any(m => string.Equals(m.Name, currentMonster.Name, StringComparison.OrdinalIgnoreCase)) &&
+                        currentMonster.Disposition.Equals("aggressive", StringComparison.OrdinalIgnoreCase))
+                    {
+                        // Keep aggressive monsters that might have been missed in parsing
+                        mergedMonsters.Add(currentMonster);
+                        System.Diagnostics.Debug.WriteLine($"?? ROOM REFRESH: Preserved missing aggressive monster '{currentMonster.Name}'");
+                    }
+                }
+                
+                // Update the parsed room state with merged monster information
+                state = new RoomState
+                {
+                    Name = state.Name,
+                    Exits = state.Exits,
+                    Items = state.Items,
+                    Monsters = mergedMonsters,
+                    LastUpdated = DateTime.UtcNow
+                };
+            }
+
             _lineBuffer.MarkProcessed(toMark, l => l.ProcessedForRoomDetection = true);
         }
         else
@@ -616,13 +672,83 @@ public class RoomTracker
                     {
                         _adjacentRoomData[curKey] = new();
                     }
+
+                    // CRITICAL FIX: Preserve existing monster disposition information
+                    // Check if we have existing information about this room
+                    var adjKey = MakeKey(user, character, parsed.Name);
+                    if (_rooms.ContainsKey(adjKey))
+                    {
+                        var existingRoom = _rooms[adjKey];
+                        
+                        // Merge monster disposition information from existing room data
+                        var mergedMonsters = new List<MonsterInfo>();
+                        foreach (var newMonster in parsed.Monsters)
+                        {
+                            // Look for existing monster with same name
+                            var existingMonster = existingRoom.Monsters.FirstOrDefault(m => 
+                                string.Equals(m.Name, newMonster.Name, StringComparison.OrdinalIgnoreCase) ||
+                                string.Equals(m.Name?.Replace(" (summoned)", ""), newMonster.Name, StringComparison.OrdinalIgnoreCase));
+                            
+                            if (existingMonster != null)
+                            {
+                                // Preserve the existing disposition and targeting info
+                                mergedMonsters.Add(new MonsterInfo(
+                                    newMonster.Name, 
+                                    existingMonster.Disposition, // Keep existing disposition (aggressive/neutral)
+                                    existingMonster.TargetingYou, // Keep existing targeting status
+                                    newMonster.Count));
+                                
+                                System.Diagnostics.Debug.WriteLine($"?? LOOK MERGE: Preserved {existingMonster.Disposition} disposition for '{newMonster.Name}'");
+                            }
+                            else
+                            {
+                                // New monster, use default neutral disposition
+                                mergedMonsters.Add(newMonster);
+                            }
+                        }
+                        
+                        // Also check for monsters that exist in our current room but not in the look result
+                        // (they might have moved to the adjacent room)
+                        foreach (var currentMonster in CurrentRoom.Monsters)
+                        {
+                            // If this monster is not in the look result but was aggressive, track it
+                            if (!mergedMonsters.Any(m => string.Equals(m.Name, currentMonster.Name, StringComparison.OrdinalIgnoreCase)) &&
+                                currentMonster.Disposition.Equals("aggressive", StringComparison.OrdinalIgnoreCase))
+                            {
+                                // Monster may have moved to the adjacent room - add it with aggressive disposition
+                                mergedMonsters.Add(new MonsterInfo(
+                                    currentMonster.Name,
+                                    currentMonster.Disposition,
+                                    currentMonster.TargetingYou,
+                                    currentMonster.Count));
+                                
+                                System.Diagnostics.Debug.WriteLine($"?? LOOK MERGE: Added missing aggressive monster '{currentMonster.Name}' to adjacent room");
+                            }
+                        }
+                        
+                        // Update the parsed room with merged monster information
+                        parsed = new RoomState
+                        {
+                            Name = parsed.Name,
+                            Exits = parsed.Exits,
+                            Items = parsed.Items,
+                            Monsters = mergedMonsters,
+                            LastUpdated = DateTime.UtcNow
+                        };
+                    }
+
                     _adjacentRoomData[curKey][dir] = parsed;
 
-                    var adjKey = MakeKey(user, character, parsed.Name);
                     if (!_rooms.ContainsKey(adjKey))
                     {
                         _rooms[adjKey] = parsed;
                     }
+                    else
+                    {
+                        // Update existing room with merged data
+                        _rooms[adjKey] = parsed;
+                    }
+                    
                     LinkRooms(user, character, CurrentRoom.Name, dir, parsed.Name);
                 }
                 _lastLookParsed = DateTime.UtcNow;

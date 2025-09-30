@@ -10,6 +10,7 @@ using DoorTelnet.Core.Navigation.Services;
 using DoorTelnet.Core.Navigation.Models;
 using System.Windows.Threading;
 using System.Threading.Tasks;
+using System.ComponentModel;
 
 namespace DoorTelnet.Wpf.ViewModels;
 
@@ -23,14 +24,77 @@ public partial class RoomViewModel : ViewModelBase
     private readonly RoomMatchingService? _roomMatchingService;
     private readonly DispatcherTimer _searchTimer;
 
-    public class MonsterDisplay
+    public class MonsterDisplay : INotifyPropertyChanged
     {
-        public string Name { get; set; } = string.Empty;
-        public string Disposition { get; set; } = "neutral";
+        private string _name = string.Empty;
+        private string _disposition = "neutral";
+        private bool _targetingYou;
+        private int? _count;
+
+        public string Name 
+        { 
+            get => _name; 
+            set 
+            { 
+                if (_name != value) 
+                { 
+                    _name = value; 
+                    OnPropertyChanged(); 
+                    OnPropertyChanged(nameof(DisplayName)); 
+                } 
+            } 
+        }
+
+        public string Disposition 
+        { 
+            get => _disposition; 
+            set 
+            { 
+                if (_disposition != value) 
+                { 
+                    _disposition = value; 
+                    OnPropertyChanged(); 
+                    OnPropertyChanged(nameof(IsAggressive)); 
+                } 
+            } 
+        }
+
+        public bool TargetingYou 
+        { 
+            get => _targetingYou; 
+            set 
+            { 
+                if (_targetingYou != value) 
+                { 
+                    _targetingYou = value; 
+                    OnPropertyChanged(); 
+                } 
+            } 
+        }
+
+        public int? Count 
+        { 
+            get => _count; 
+            set 
+            { 
+                if (_count != value) 
+                { 
+                    _count = value; 
+                    OnPropertyChanged(); 
+                    OnPropertyChanged(nameof(DisplayName)); 
+                } 
+            } 
+        }
+
         public bool IsAggressive => string.Equals(Disposition, "aggressive", StringComparison.OrdinalIgnoreCase);
-        public bool TargetingYou { get; set; }
-        public int? Count { get; set; }
         public string DisplayName => Count.HasValue && Count.Value > 1 ? $"{Name} x{Count}" : Name;
+
+        public event PropertyChangedEventHandler? PropertyChanged;
+
+        protected virtual void OnPropertyChanged([System.Runtime.CompilerServices.CallerMemberName] string? propertyName = null)
+        {
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
+        }
     }
 
     public class MovementModeOption

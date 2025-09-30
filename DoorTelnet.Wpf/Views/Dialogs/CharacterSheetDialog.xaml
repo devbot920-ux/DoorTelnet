@@ -71,11 +71,12 @@
                             <StackPanel Margin="4">
                                 <TextBlock Text="Critical Action" FontSize="11"
                                           ToolTip="Action to take when critical HP is reached: stop, disconnect, or custom script"/>
-                                <ComboBox SelectedItem="{Binding CriticalAction}" Width="90">
-                                    <ComboBoxItem Content="stop"/>
-                                    <ComboBoxItem Content="disconnect"/>
-                                    <ComboBoxItem Content="script:{command}"/>
-                                </ComboBox>
+                                <ComboBox SelectedItem="{Binding CriticalAction, UpdateSourceTrigger=PropertyChanged}" 
+                                          ItemsSource="{Binding CriticalActionOptions}"
+                                          Width="90" 
+                                          IsEditable="True"
+                                          IsTextSearchEnabled="False"
+                                          ToolTip="Select or enter custom action: stop, disconnect, or script:{your_command}"/>
                             </StackPanel>
                         </UniformGrid>
                     </StackPanel>

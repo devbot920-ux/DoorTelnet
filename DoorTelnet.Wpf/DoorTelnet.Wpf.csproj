@@ -19,11 +19,21 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <UseWPF>true</UseWPF>
+    <ApplicationIcon>Resources\app_icon.ico</ApplicationIcon>
   </PropertyGroup>
 
   <ItemGroup>
     <Content Include="appsettings.json" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="..\graph.json" Link="graph.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Resource Include="Resources\app_icon.ico" />
+    <Resource Include="Resources\app_icon_16.png" />
+    <Resource Include="Resources\app_icon_32.png" />
+    <Resource Include="Resources\app_icon_48.png" />
+    <Resource Include="Resources\app_icon_256.png" />
+    <Resource Include="Resources\ICON_INTEGRATION.md" />
   </ItemGroup>
 
 </Project>

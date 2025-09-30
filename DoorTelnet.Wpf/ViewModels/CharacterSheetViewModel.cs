@@ -48,20 +48,45 @@ public partial class CharacterSheetViewModel : ViewModelBase
     public ObservableCollection<string> Inventory { get; } = new();
 
     // Automation toggles
-    public bool AutoShield { get => _profile.Features.AutoShield; set { if (_profile.Features.AutoShield != value) { _profile.Features.AutoShield = value; OnPropertyChanged(); } } }
-    public bool AutoHeal { get => _profile.Features.AutoHeal; set { if (_profile.Features.AutoHeal != value) { _profile.Features.AutoHeal = value; OnPropertyChanged(); } } }
-    public bool AutoGong { get => _profile.Features.AutoGong; set { if (_profile.Features.AutoGong != value) { _profile.Features.AutoGong = value; OnPropertyChanged(); } } }
-    public bool AutoAttack { get => _profile.Features.AutoAttack; set { if (_profile.Features.AutoAttack != value) { _profile.Features.AutoAttack = value; OnPropertyChanged(); } } }
-    public bool PickupGold { get => _profile.Features.PickupGold; set { if (_profile.Features.PickupGold != value) { _profile.Features.PickupGold = value; OnPropertyChanged(); } } }
-    public bool PickupSilver { get => _profile.Features.PickupSilver; set { if (_profile.Features.PickupSilver != value) { _profile.Features.PickupSilver = value; OnPropertyChanged(); } } }
+    public bool AutoShield { get => _profile.Features.AutoShield; set { if (_profile.Features.AutoShield != value) { _profile.Features.AutoShield = value; OnPropertyChanged(); TriggerProfileUpdate(); } } }
+    public bool AutoHeal { get => _profile.Features.AutoHeal; set { if (_profile.Features.AutoHeal != value) { _profile.Features.AutoHeal = value; OnPropertyChanged(); TriggerProfileUpdate(); } } }
+    public bool AutoGong { get => _profile.Features.AutoGong; set { if (_profile.Features.AutoGong != value) { _profile.Features.AutoGong = value; OnPropertyChanged(); TriggerProfileUpdate(); } } }
+    public bool AutoAttack { get => _profile.Features.AutoAttack; set { if (_profile.Features.AutoAttack != value) { _profile.Features.AutoAttack = value; OnPropertyChanged(); TriggerProfileUpdate(); } } }
+    public bool PickupGold { get => _profile.Features.PickupGold; set { if (_profile.Features.PickupGold != value) { _profile.Features.PickupGold = value; OnPropertyChanged(); TriggerProfileUpdate(); } } }
+    public bool PickupSilver { get => _profile.Features.PickupSilver; set { if (_profile.Features.PickupSilver != value) { _profile.Features.PickupSilver = value; OnPropertyChanged(); TriggerProfileUpdate(); } } }
 
     // Threshold bindings
-    public int ShieldRefreshSec { get => _profile.Thresholds.ShieldRefreshSec; set { if (_profile.Thresholds.ShieldRefreshSec != value) { _profile.Thresholds.ShieldRefreshSec = value; OnPropertyChanged(); } } }
-    public int GongMinHpPercent { get => _profile.Thresholds.GongMinHpPercent; set { var v = Math.Max(0, Math.Min(100, value)); if (_profile.Thresholds.GongMinHpPercent != v) { _profile.Thresholds.GongMinHpPercent = v; OnPropertyChanged(); } } }
-    public int AutoHealHpPercent { get => _profile.Thresholds.AutoHealHpPercent; set { var v = Math.Max(0, Math.Min(100, value)); if (_profile.Thresholds.AutoHealHpPercent != v) { _profile.Thresholds.AutoHealHpPercent = v; OnPropertyChanged(); } } }
-    public int WarningHealHpPercent { get => _profile.Thresholds.WarningHealHpPercent; set { var v = Math.Max(0, Math.Min(100, value)); if (_profile.Thresholds.WarningHealHpPercent != v) { _profile.Thresholds.WarningHealHpPercent = v; OnPropertyChanged(); } } }
-    public int CriticalHpPercent { get => _profile.Thresholds.CriticalHpPercent; set { var v = Math.Max(0, Math.Min(100, value)); if (_profile.Thresholds.CriticalHpPercent != v) { _profile.Thresholds.CriticalHpPercent = v; OnPropertyChanged(); } } }
-    public string CriticalAction { get => _profile.Thresholds.CriticalAction; set { if (_profile.Thresholds.CriticalAction != value) { _profile.Thresholds.CriticalAction = value ?? "stop"; OnPropertyChanged(); } } }
+    public int ShieldRefreshSec { get => _profile.Thresholds.ShieldRefreshSec; set { if (_profile.Thresholds.ShieldRefreshSec != value) { _profile.Thresholds.ShieldRefreshSec = value; OnPropertyChanged(); TriggerProfileUpdate(); } } }
+    public int GongMinHpPercent { get => _profile.Thresholds.GongMinHpPercent; set { var v = Math.Max(0, Math.Min(100, value)); if (_profile.Thresholds.GongMinHpPercent != v) { _profile.Thresholds.GongMinHpPercent = v; OnPropertyChanged(); TriggerProfileUpdate(); } } }
+    public int AutoHealHpPercent { get => _profile.Thresholds.AutoHealHpPercent; set { var v = Math.Max(0, Math.Min(100, value)); if (_profile.Thresholds.AutoHealHpPercent != v) { _profile.Thresholds.AutoHealHpPercent = v; OnPropertyChanged(); TriggerProfileUpdate(); } } }
+    public int WarningHealHpPercent { get => _profile.Thresholds.WarningHealHpPercent; set { var v = Math.Max(0, Math.Min(100, value)); if (_profile.Thresholds.WarningHealHpPercent != v) { _profile.Thresholds.WarningHealHpPercent = v; OnPropertyChanged(); TriggerProfileUpdate(); } } }
+    public int CriticalHpPercent { get => _profile.Thresholds.CriticalHpPercent; set { var v = Math.Max(0, Math.Min(100, value)); if (_profile.Thresholds.CriticalHpPercent != v) { _profile.Thresholds.CriticalHpPercent = v; OnPropertyChanged(); TriggerProfileUpdate(); } } }
+    public string CriticalAction 
+    { 
+        get => _profile.Thresholds.CriticalAction; 
+        set 
+        { 
+            if (_profile.Thresholds.CriticalAction != value) 
+            { 
+                _logger.LogDebug("CriticalAction changing from '{old}' to '{new}'", _profile.Thresholds.CriticalAction, value);
+                _profile.Thresholds.CriticalAction = value ?? "disconnect"; // Changed from "stop" to "disconnect"
+                OnPropertyChanged(); 
+                TriggerProfileUpdate(); // Trigger profile update for automation system
+                _logger.LogInformation("CriticalAction updated to '{action}' - automation system notified", _profile.Thresholds.CriticalAction);
+            } 
+        } 
+    }
+
+    // Critical Action options for dropdown
+    public ObservableCollection<string> CriticalActionOptions { get; } = new ObservableCollection<string>
+    {
+        "disconnect",  // Moved to first position as the safest default
+        "stop",
+        "script:quit",
+        "script:heal",
+        "script:{DISCONNECT}",
+        "script:{custom command}"
+    };
 
     public void RefreshFromProfile()
     {
@@ -83,5 +108,21 @@ public partial class CharacterSheetViewModel : ViewModelBase
         OnPropertyChanged(nameof(WarningHealHpPercent));
         OnPropertyChanged(nameof(CriticalHpPercent));
         OnPropertyChanged(nameof(CriticalAction));
+    }
+
+    // Helper method to trigger profile updates when nested properties change
+    private void TriggerProfileUpdate()
+    {
+        try 
+        { 
+            // Use reflection to call the private RaiseUpdated method
+            var method = _profile.GetType().GetMethod("RaiseUpdated", 
+                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+            method?.Invoke(_profile, null);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to trigger profile update");
+        }
     }
 }

@@ -383,6 +383,10 @@ public partial class App : Application
                 });
 
                 services.AddSingleton<PlayerProfile>();
+                
+                // Navigation feature service (Phase 3) - moved before AutomationFeatureService
+                services.AddSingleton<NavigationFeatureService>();
+                
                 services.AddSingleton<AutomationFeatureService>(sp =>
                 {
                     var stats = sp.GetRequiredService<StatsTracker>();
@@ -391,14 +395,12 @@ public partial class App : Application
                     var room = sp.GetRequiredService<RoomTracker>();
                     var combat = sp.GetRequiredService<CombatTracker>();
                     var charStore = sp.GetRequiredService<CharacterProfileStore>();
+                    var navigationService = sp.GetRequiredService<NavigationFeatureService>(); // NEW injection
                     var logger = sp.GetRequiredService<ILogger<AutomationFeatureService>>();
                     
-                    return new AutomationFeatureService(stats, profile, client, room, combat, charStore, logger);
+                    return new AutomationFeatureService(stats, profile, client, room, combat, charStore, logger, navigationService);
                 });
 
-                // Navigation feature service (Phase 3)
-                services.AddSingleton<NavigationFeatureService>();
-                
                 // ViewModels / dialogs
                 services.AddTransient<SettingsViewModel>();
                 services.AddTransient<CredentialsViewModel>();

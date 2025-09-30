@@ -65,6 +65,7 @@
                 <RowDefinition Height="Auto"/>
                 <RowDefinition Height="Auto"/>
                 <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
             </Grid.RowDefinitions>
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="*"/>
@@ -97,7 +98,7 @@
             
             <!-- Quick mode selection buttons -->
             <StackPanel Grid.Row="2" Grid.Column="0" Grid.ColumnSpan="3" 
-                        Orientation="Horizontal" Margin="0 2 0 4">
+                        Orientation="Horizontal" Margin="0 2 0 6">
                 <Button Content="? Ultra" 
                         Command="{Binding SelectUltraFastModeCommand}"
                         FontSize="8" Padding="4,1" Margin="0 0 2 0"
@@ -164,9 +165,9 @@
                     Command="{Binding StopNavigationCommand}"
                     FontSize="10" Padding="8,2" Margin="2 0 0 0"/>
             
-            <!-- Quick actions row -->
+            <!-- Quick actions row - Fixed spacing and layout -->
             <StackPanel Grid.Row="4" Grid.Column="0" Grid.ColumnSpan="3" 
-                        Orientation="Horizontal" Margin="0 2">
+                        Orientation="Horizontal" Margin="0 4 0 8">
                 <Button Content="Find Stores" 
                         Command="{Binding FindStoresCommand}"
                         FontSize="9" Padding="6,2" Margin="0 0 4 0"
@@ -177,11 +178,14 @@
                         ToolTip="Navigate when safe"/>
             </StackPanel>
             
-            <!-- Status display -->
-            <TextBlock Grid.Row="5" Grid.Column="0" Grid.ColumnSpan="3"
-                       Text="{Binding NavigationStatus}" 
-                       FontSize="10" Foreground="#888" 
-                       TextWrapping="Wrap" Margin="0 4 0 0"/>
+            <!-- Status display - Moved to separate row with more top margin -->
+            <Border Grid.Row="5" Grid.Column="0" Grid.ColumnSpan="3"
+                    Background="#2a2a2a" BorderBrush="#444" BorderThickness="1" 
+                    CornerRadius="3" Padding="6,4" Margin="0 4 0 0">
+                <TextBlock Text="{Binding NavigationStatus}" 
+                           FontSize="10" Foreground="#AAA" 
+                           TextWrapping="Wrap"/>
+            </Border>
         </Grid>
 
         <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0 8 0 0">

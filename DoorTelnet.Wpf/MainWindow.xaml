@@ -8,6 +8,7 @@
         xmlns:views="clr-namespace:DoorTelnet.Wpf.Views"
         mc:Ignorable="d"
         Title="DoorTelnet" Height="650" Width="1150" MinWidth="900" MinHeight="550"
+        Icon="Resources/app_icon.ico"
         Background="{StaticResource Brush.Background}">
     <DockPanel>
         <!-- Top bar with menu and connect button (stats panel removed) -->

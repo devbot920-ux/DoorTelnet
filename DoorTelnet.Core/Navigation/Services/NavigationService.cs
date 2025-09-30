@@ -71,8 +71,6 @@ public class NavigationService
         _roomTracker.RoomChanged += OnRoomChanged;
         _movementQueue.CommandExecuted += OnMovementCommandExecuted;
         _movementQueue.ExecutionInterrupted += OnMovementInterrupted;
-        _combatTracker.CombatStarted += OnCombatStarted;
-        _combatTracker.CombatCompleted += OnCombatCompleted;
 
         // Start safety monitoring
         _ = Task.Run(SafetyMonitoringLoop);
@@ -540,30 +538,6 @@ public class NavigationService
         }
     }
 
-    private void OnCombatStarted(ActiveCombat combat)
-    {
-        if (_playerProfile.Features.PauseNavigationInCombat && CurrentState == NavigationState.Navigating)
-        {
-            PauseNavigation($"Combat detected with {combat.MonsterName}");
-        }
-    }
-
-    private void OnCombatCompleted(CombatEntry combat)
-    {
-        if (_playerProfile.Features.PauseNavigationInCombat && CurrentState == NavigationState.Paused)
-        {
-            // Wait a moment before resuming to ensure safety
-            Task.Run(async () =>
-            {
-                await Task.Delay(2000); // Wait 2 seconds
-                if (CurrentState == NavigationState.Paused && IsSafeToNavigate(out _))
-                {
-                    ResumeNavigation();
-                }
-            });
-        }
-    }
-
     private async Task SafetyMonitoringLoop()
     {
         while (true)
@@ -640,16 +614,8 @@ public class NavigationService
             }
         }
 
-        // Check combat state
-        if (_playerProfile.Features.PauseNavigationInCombat)
-        {
-            var activeCombats = _combatTracker.ActiveCombats;
-            if (activeCombats.Count > 0)
-            {
-                reason = $"In combat with {activeCombats.Count} enemy(ies)";
-                return false;
-            }
-        }
+        // REMOVED: Combat state check - navigation now allowed during combat
+        // This allows players to navigate away from danger even when in combat
 
         return true;
     }

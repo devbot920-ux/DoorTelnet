@@ -25,9 +25,12 @@ public class AutomationFeatureService : IDisposable
     private readonly RoomTracker _room; // inject room tracker to mirror CLI auto gong logic
     private readonly CombatTracker _combat; // inject combat tracker for targeting logic
     private readonly CharacterProfileStore _charStore; // NEW for obtaining character name
+    private readonly NavigationFeatureService? _navigationService; // NEW for travel gold pickup
     private readonly ILogger<AutomationFeatureService> _logger;
     private DateTime _lastShield = DateTime.MinValue;
     private DateTime _lastHeal = DateTime.MinValue;
+    private DateTime _lastRoomEntry = DateTime.MinValue; // NEW for tracking room entry cooldown
+    private readonly Dictionary<string, DateTime> _roomGoldPickupAttempts = new(); // NEW for tracking gold pickup attempts per room
     private Timer _timer;
 
     // AutoGong state (mirrors CLI Runner.TryRunAutomation logic)
@@ -41,18 +44,19 @@ public class AutomationFeatureService : IDisposable
     private DateTime _lastAttackReset = DateTime.MinValue;
 
     private readonly Regex _coinRegex = new("(gold|silver) coin", RegexOptions.IgnoreCase | RegexOptions.Compiled);
-    private readonly Regex _shieldCastRegex = new(@"(magical shield surrounds you|You are surrounded by a magical shield|You are shielded\.)", RegexOptions.IgnoreCase | RegexOptions.Compiled);
-    private readonly Regex _shieldFadeRegex = new(@"(shield fades|magical shield shatters|shield disipated|shield dissipated)", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+    private readonly Regex _shieldCastRegex = new(@"(magical shield surrounds you|You are surrounded by a magical shield|You are shielded\.|You imbue the power of the Aegis onto)", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+    private readonly Regex _shieldFadeRegex = new(@"(shield fades|magical shield shatters|shield disipated|shield dissipated|Your magical shield shimmers and dissapears!)", RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
     private bool _lastAutoGongEnabled;
     private string? _selectedUser; // future: could come from credentials dialog
 
-    public AutomationFeatureService(StatsTracker stats, PlayerProfile profile, TelnetClient client, RoomTracker room, CombatTracker combat, CharacterProfileStore charStore, ILogger<AutomationFeatureService> logger)
+    public AutomationFeatureService(StatsTracker stats, PlayerProfile profile, TelnetClient client, RoomTracker room, CombatTracker combat, CharacterProfileStore charStore, ILogger<AutomationFeatureService> logger, NavigationFeatureService? navigationService = null)
     {
-        _stats = stats; _profile = profile; _client = client; _room = room; _combat = combat; _charStore = charStore; _logger = logger;
+        _stats = stats; _profile = profile; _client = client; _room = room; _combat = combat; _charStore = charStore; _navigationService = navigationService; _logger = logger;
         _stats.Updated += OnStatsUpdated; // update HP snapshot quickly
         _client.LineReceived += OnLine;
         _profile.Updated += () => EvaluateAutomation(true);
+        _room.RoomChanged += OnRoomChanged; // NEW for tracking room entry
         _timer = new Timer(_ => EvaluateAutomation(false), null, 2000, 500); // Reduced from 1000ms to 500ms for more responsive automation
         _lastAutoGongEnabled = profile.Features.AutoGong;
         
@@ -158,9 +162,14 @@ public class AutomationFeatureService : IDisposable
 
             // AutoAttack (independent of gong cycle) - attacks any aggressive monsters immediately
             // This now shares the same attack tracking logic as AutoGong
+            // IMPORTANT: Check for warning heal state to avoid attacking when healing is needed
             if (feats.AutoAttack && !feats.AutoGong) // Only do independent AutoAttack if AutoGong is disabled
             {
-                AttackAggressiveMonsters("AutoAttack");
+                // Don't attack if we're waiting for heal timers due to warning heal level
+                if (!_waitingForHealTimers)
+                {
+                    AttackAggressiveMonsters("AutoAttack");
+                }
             }
         }
         catch { }
@@ -267,15 +276,66 @@ public class AutomationFeatureService : IDisposable
                 return; // Exit early on critical health
             }
 
-            // Auto shield (improved: select best available shield spell and cast on character)
+            // Travel Gold Pickup - NEW feature for picking up gold during navigation
+            if (feats.PickupGold)
+            {
+                TryPickupTravelGold();
+            }
+
+            // ---------- AUTO SHIELD (Enhanced with timer coordination) ----------
+            // Auto shield should have high priority but respect gong cycles and timer states
             if (feats.AutoShield && !_profile.Effects.Shielded)
             {
-                if ((now - _lastShield).TotalSeconds >= Math.Max(5, Math.Max(th.ShieldRefreshSec, 10)))
+                var timeSinceLastShield = (now - _lastShield).TotalSeconds;
+                var shieldRefreshInterval = Math.Max(5, Math.Max(th.ShieldRefreshSec, 10));
+                
+                // Enhanced shield timing logic
+                bool shouldCastShield = false;
+                string reason = "";
+                
+                if (timeSinceLastShield >= shieldRefreshInterval)
+                {
+                    // Priority 1: Always cast shield if not in combat and timers are ready
+                    if (_stats.At == 0 && _stats.Ac == 0 && !_inGongCycle && !_waitingForTimers && !_waitingForHealTimers)
+                    {
+                        shouldCastShield = true;
+                        reason = "Timers ready, not in gong cycle";
+                    }
+                    // Priority 2: Cast shield before starting new gong cycle (preemptive shielding)
+                    else if (feats.AutoGong && !_inGongCycle && !_waitingForTimers && !_waitingForHealTimers && 
+                             _stats.At == 0 && _stats.Ac == 0 && _stats.MaxHp > 0 && _hpPct >= th.GongMinHpPercent)
+                    {
+                        var room = _room.CurrentRoom;
+                        if (room != null && !room.Monsters.Any(m => m.Disposition.Equals("aggressive", StringComparison.OrdinalIgnoreCase)))
+                        {
+                            // About to start new gong cycle, cast shield first
+                            // Check if we're close to starting a gong (within the next few cycles)
+                            var timeSinceLastGong = (now - _lastGongAction).TotalMilliseconds;
+                            if (timeSinceLastGong >= 1200) // Close to 1500ms gong interval
+                            {
+                                shouldCastShield = true;
+                                reason = "Preemptive shielding before gong cycle";
+                            }
+                        }
+                    }
+                    // Priority 3: Emergency shielding during combat if timers allow brief interruption
+                    else if ((_inGongCycle || (feats.AutoAttack && !feats.AutoGong)) && _stats.At == 0 && _stats.Ac == 0)
+                    {
+                        // Only do emergency shield if we haven't shielded recently and it's really needed
+                        if (timeSinceLastShield >= 30) // Emergency threshold - longer interval during combat
+                        {
+                            shouldCastShield = true;
+                            reason = "Emergency shielding during combat (timers ready)";
+                        }
+                    }
+                }
+                
+                if (shouldCastShield)
                 {
                     var bestShield = SelectBestShieldSpell();
                     if (bestShield != null)
                     {
-                        var target = GetCharacterName();
+                        var target = GetCharacterName()?.Split(" ")[0]; // Use only first name
                         if (string.IsNullOrWhiteSpace(target))
                         {
                             _logger.LogDebug("AutoShield skipped - no character name yet");
@@ -285,7 +345,7 @@ public class AutomationFeatureService : IDisposable
                             var cmd = $"cast {bestShield.Nick} {target}";
                             _client.SendCommand(cmd);
                             _lastShield = now;
-                            _logger.LogTrace("AutoShield cast {spell}", bestShield.Nick);
+                            _logger.LogInformation("AutoShield cast {spell} on {target} - {reason}", bestShield.Nick, target, reason);
                         }
                     }
                     else
@@ -295,8 +355,51 @@ public class AutomationFeatureService : IDisposable
                         {
                             _client.SendCommand(shield);
                             _lastShield = now;
-                            _logger.LogTrace("AutoShield (fallback) '{spell}'", shield);
+                            _logger.LogInformation("AutoShield (fallback) '{spell}' - {reason}", shield, reason);
                         }
+                    }
+                }
+                else if (feats.AutoShield && !_profile.Effects.Shielded && timeSinceLastShield >= shieldRefreshInterval)
+                {
+                    // Log why we're not shielding for debugging
+                    _logger.LogTrace("AutoShield waiting - AT:{at} AC:{ac} InGong:{gong} WaitTimers:{waitT} WaitHeal:{waitH}", 
+                        _stats.At, _stats.Ac, _inGongCycle, _waitingForTimers, _waitingForHealTimers);
+                }
+            }
+            // ---------- End AUTO SHIELD ----------
+
+            // WARNING HEAL LOGIC - Shared by both AutoGong and AutoAttack
+            // This must be evaluated before AutoGong and AutoAttack logic
+            if (_stats.MaxHp > 0)
+            {
+                var hpPercent = _hpPct;
+                
+                // Check warning heal level - stop automation and wait for heal timers
+                if (hpPercent <= th.WarningHealHpPercent && th.WarningHealHpPercent > 0 && !_waitingForHealTimers)
+                {
+                    if (_inGongCycle || (feats.AutoAttack && !feats.AutoGong))
+                    {
+                        _client.SendCommand("stop");
+                        if (_inGongCycle)
+                        {
+                            _inGongCycle = false;
+                            _logger.LogInformation("AutoGong stopped due to warning heal level - HP {hp}% below {thresh}%", hpPercent, th.WarningHealHpPercent);
+                        }
+                        if (feats.AutoAttack && !feats.AutoGong)
+                        {
+                            _logger.LogInformation("AutoAttack stopped due to warning heal level - HP {hp}% below {thresh}%", hpPercent, th.WarningHealHpPercent);
+                        }
+                        _waitingForHealTimers = true;
+                    }
+                }
+                
+                // If waiting for heal timers, check if we can resume
+                if (_waitingForHealTimers)
+                {
+                    if (_stats.At == 0 && _stats.Ac == 0)
+                    {
+                        _waitingForHealTimers = false;
+                        _logger.LogInformation("Heal timers ready - automation can resume (HP: {hp}%)", hpPercent);
                     }
                 }
             }
@@ -318,28 +421,6 @@ public class AutomationFeatureService : IDisposable
                 if (_stats.MaxHp > 0)
                 {
                     var hpPercent = _hpPct; // already cached
-                    
-                    // Check warning heal level - stop gong and wait for heal timers
-                    if (hpPercent <= th.WarningHealHpPercent && th.WarningHealHpPercent > 0 && !_waitingForHealTimers)
-                    {
-                        if (_inGongCycle)
-                        {
-                            _client.SendCommand("stop");
-                            _inGongCycle = false;
-                            _waitingForHealTimers = true;
-                            _logger.LogInformation("AutoGong stopped due to warning heal level - HP {hp}% below {thresh}%", hpPercent, th.WarningHealHpPercent);
-                        }
-                    }
-                    
-                    // If waiting for heal timers, check if we can resume
-                    if (_waitingForHealTimers)
-                    {
-                        if (_stats.At == 0 && _stats.Ac == 0)
-                        {
-                            _waitingForHealTimers = false;
-                            _logger.LogTrace("AutoGong heal timers ready - can resume");
-                        }
-                    }
                     
                     if (hpPercent < th.GongMinHpPercent)
                     {
@@ -420,6 +501,32 @@ public class AutomationFeatureService : IDisposable
             _lastAutoGongEnabled = feats.AutoGong;
             // ---------- End Auto Gong ----------
 
+            // ---------- Independent AutoAttack (when AutoGong is disabled) ----------
+            // This provides attack functionality separate from gong automation
+            if (feats.AutoAttack && !feats.AutoGong && _stats.MaxHp > 0)
+            {
+                var hpPercent = _hpPct;
+                
+                // Only attack if HP is above minimum threshold and not waiting for heal timers
+                if (hpPercent >= th.GongMinHpPercent && !_waitingForHealTimers)
+                {
+                    var room = _room.CurrentRoom;
+                    if (room != null)
+                    {
+                        var aggressivePresent = room.Monsters.Any(m => m.Disposition.Equals("aggressive", StringComparison.OrdinalIgnoreCase));
+                        if (aggressivePresent)
+                        {
+                            AttackAggressiveMonsters("AutoAttack-Independent");
+                        }
+                    }
+                }
+                else if (hpPercent < th.GongMinHpPercent)
+                {
+                    _logger.LogDebug("AutoAttack paused - HP {hp}% below threshold {thresh}%", hpPercent, th.GongMinHpPercent);
+                }
+            }
+            // ---------- End Independent AutoAttack ----------
+
             // Auto heal (enhanced with warning level support)
             if (feats.AutoHeal && th.AutoHealHpPercent > 0 && _stats.MaxHp > 0)
             {
@@ -442,12 +549,12 @@ public class AutomationFeatureService : IDisposable
                     var deficit = _stats.MaxHp - _stats.Hp;
                     string desired = deficit < 250 ? "minheal" : deficit < 500 ? "superheal" : "tolife";
                     var spell = _profile.Spells.FirstOrDefault(s => s.Nick.Equals(desired, StringComparison.OrdinalIgnoreCase));
-                    var target = GetCharacterName()?.Split(" ")[0];
+                    var target = GetCharacterName()?.Split(" ")[0]; // Use only first name
                     if (spell != null && target != null && _stats.Mp >= spell.Mana)
                     {
                         _client.SendCommand($"cast {spell.Nick} {target}");
                         _lastHeal = now;
-                        _logger.LogTrace("AutoHeal cast {spell} (deficit={def}, hp%={pct})", spell.Nick, deficit, hpPercent);
+                        _logger.LogTrace("AutoHeal cast {spell} on {target} (deficit={def}, hp%={pct})", spell.Nick, target, deficit, hpPercent);
                     }
                 }
             }
@@ -457,8 +564,16 @@ public class AutomationFeatureService : IDisposable
 
     private SpellInfo? SelectBestShieldSpell()
     {
-        // priority order
-        var order = new[] { "aegis", "gshield", "shield", "paura" };
+        // Aegis always takes priority if available and caster has sufficient mana
+        var aegis = _profile.Spells.FirstOrDefault(sp => sp.Nick.Equals("aegis", StringComparison.OrdinalIgnoreCase));
+        if (aegis != null && _stats.Mp >= aegis.Mana) 
+        {
+            _logger.LogTrace("AutoShield selected Aegis as best shield (always prioritized)");
+            return aegis;
+        }
+
+        // Fallback priority order for other shields
+        var order = new[] { "gshield", "shield", "paura" };
         foreach (var o in order)
         {
             var s = _profile.Spells.FirstOrDefault(sp => sp.Nick.Equals(o, StringComparison.OrdinalIgnoreCase));
@@ -480,6 +595,7 @@ public class AutomationFeatureService : IDisposable
         try { _timer?.Dispose(); } catch { }
         _stats.Updated -= OnStatsUpdated;
         _client.LineReceived -= OnLine;
+        _room.RoomChanged -= OnRoomChanged; // NEW cleanup
         _combat.MonsterTargeted -= OnMonsterTargeted;
         _combat.MonsterDeath -= OnMonsterDeath;
         _combat.MonsterBecameAggressive -= OnMonsterBecameAggressive;
@@ -629,7 +745,7 @@ public class AutomationFeatureService : IDisposable
             var hpPercent = _hpPct;
             var th = _profile.Thresholds;
             
-            if (hpPercent >= th.GongMinHpPercent)
+            if (hpPercent >= th.GongMinHpPercent && !_waitingForHealTimers)
             {
                 // If we're waiting for timers, reset and enter combat mode immediately
                 if (_waitingForTimers)
@@ -648,20 +764,112 @@ public class AutomationFeatureService : IDisposable
                 // Trigger immediate attack check - don't wait for the next evaluation cycle
                 AttackAggressiveMonsters("AutoGong-Immediate");
             }
+            else if (_waitingForHealTimers)
+            {
+                _logger.LogInformation("AutoGong cannot attack '{monster}' - waiting for heal timers (HP: {hp}%)", monsterName, hpPercent);
+            }
             else
             {
                 _logger.LogWarning("AutoGong cannot attack '{monster}' - HP {hp}% below threshold {thresh}%", monsterName, hpPercent, th.GongMinHpPercent);
             }
         }
-        else if (feats.AutoAttack && !feats.AutoGong)
+        else if (feats.AutoAttack && !feats.AutoGong && _stats.MaxHp > 0)
         {
-            // Independent AutoAttack mode
-            _logger.LogDebug("AutoAttack triggered for aggressive monster '{monster}'", monsterName);
-            AttackAggressiveMonsters("AutoAttack-Immediate");
+            var hpPercent = _hpPct;
+            var th = _profile.Thresholds;
+            
+            // Independent AutoAttack mode - respect warning heal state
+            if (hpPercent >= th.GongMinHpPercent && !_waitingForHealTimers)
+            {
+                _logger.LogDebug("AutoAttack triggered for aggressive monster '{monster}'", monsterName);
+                AttackAggressiveMonsters("AutoAttack-Immediate");
+            }
+            else if (_waitingForHealTimers)
+            {
+                _logger.LogInformation("AutoAttack cannot attack '{monster}' - waiting for heal timers (HP: {hp}%)", monsterName, hpPercent);
+            }
+            else
+            {
+                _logger.LogDebug("AutoAttack cannot attack '{monster}' - HP {hp}% below threshold {thresh}%", monsterName, hpPercent, th.GongMinHpPercent);
+            }
         }
         else
         {
             _logger.LogDebug("No auto-attack configured for aggressive monster '{monster}' (AutoGong={gong}, AutoAttack={attack})", monsterName, feats.AutoGong, feats.AutoAttack);
+        }
+    }
+
+    /// <summary>
+    /// Handles room changes to track entry times for travel gold pickup
+    /// </summary>
+    private void OnRoomChanged(RoomState newRoom)
+    {
+        _lastRoomEntry = DateTime.UtcNow;
+        _logger.LogTrace("Room changed to '{room}' - entry cooldown started", newRoom.Name);
+    }
+
+    /// <summary>
+    /// Attempts to pickup gold during travel if conditions are met
+    /// </summary>
+    private void TryPickupTravelGold()
+    {
+        try
+        {
+            var room = _room.CurrentRoom;
+            if (room == null) return;
+
+            var now = DateTime.UtcNow;
+            
+            // Check room entry cooldown (3 seconds after entering room)
+            var timeSinceRoomEntry = now - _lastRoomEntry;
+            if (timeSinceRoomEntry.TotalSeconds < 3.0)
+            {
+                return; // Still in cooldown period
+            }
+
+            // Check if room has gold items to pickup
+            var hasGold = room.Items.Any(item => 
+                item.Contains("gold", StringComparison.OrdinalIgnoreCase) && 
+                item.Contains("coin", StringComparison.OrdinalIgnoreCase));
+
+            if (!hasGold) return;
+
+            // Create unique room identifier for tracking pickup attempts
+            var roomKey = $"{room.Name}_{room.Exits.Count}_{string.Join(",", room.Exits.OrderBy(x => x))}";
+            
+            // Check if we've already attempted to pickup gold in this room recently
+            if (_roomGoldPickupAttempts.TryGetValue(roomKey, out var lastAttempt))
+            {
+                if ((now - lastAttempt).TotalSeconds < 10) // Avoid spam pickup attempts
+                {
+                    return;
+                }
+            }
+
+            // Attempt gold pickup
+            _client.SendCommand("get gold");
+            _roomGoldPickupAttempts[roomKey] = now;
+            
+            // Determine context for logging
+            var isNavigating = _navigationService != null && _room.CurrentRoom != null;
+            var context = isNavigating ? "Travel" : "Room";
+            _logger.LogInformation("{context} gold pickup attempted in '{room}' (cooldown: {cooldown:F1}s)", 
+                context, room.Name, timeSinceRoomEntry.TotalSeconds);
+
+            // Cleanup old pickup attempts (older than 5 minutes)
+            var expiredKeys = _roomGoldPickupAttempts
+                .Where(kvp => (now - kvp.Value).TotalMinutes > 5)
+                .Select(kvp => kvp.Key)
+                .ToList();
+            
+            foreach (var key in expiredKeys)
+            {
+                _roomGoldPickupAttempts.Remove(key);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error in travel gold pickup");
         }
     }
 }

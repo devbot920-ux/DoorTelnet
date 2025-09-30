@@ -312,15 +312,8 @@ public class NavigationFeatureService : IDisposable, INotifyPropertyChanged
             }
         }
 
-        // Check combat state
-        if (_playerProfile.Features.PauseNavigationInCombat)
-        {
-            var activeCombats = _combatTracker.ActiveCombats;
-            if (activeCombats.Count > 0)
-            {
-                return false;
-            }
-        }
+        // REMOVED: Combat state check - navigation now allowed during combat
+        // This allows players to navigate away from danger even when in combat
 
         return true;
     }
