@@ -1,12 +1,13 @@
 using System.Collections.Concurrent;
 using DoorTelnet.Core.Navigation.Models;
 using DoorTelnet.Core.Telnet;
+using DoorTelnet.Core.World;
 using Microsoft.Extensions.Logging;
 
 namespace DoorTelnet.Core.Navigation.Services;
 
 /// <summary>
-/// Manages queued movement commands with timing and interruption support
+/// Event-driven movement queue that waits for room detection before sending next command
 /// </summary>
 public class MovementQueueService
 {
@@ -20,15 +21,40 @@ public class MovementQueueService
     private MovementCommand? _currentCommand;
     private DateTime _lastCommandTime = DateTime.MinValue;
 
+    // Event-driven execution state
+    private TaskCompletionSource<bool>? _waitingForRoomChange;
+    private bool _isWaitingForRoomDetection = false;
+    private DateTime _lastRoomChangeTime = DateTime.MinValue;
+
     // Configuration
-    private TimeSpan _defaultCommandDelay = TimeSpan.FromSeconds(1.5);
-    private TimeSpan _minCommandDelay = TimeSpan.FromMilliseconds(500);
-    private TimeSpan _maxCommandDelay = TimeSpan.FromSeconds(5);
+    private MovementMode _movementMode = MovementMode.Triggered; // Default to event-driven
+    private TimeSpan _fallbackTimeout = TimeSpan.FromSeconds(8); // Fallback timeout
+    private TimeSpan _minCommandInterval = TimeSpan.FromMilliseconds(50); // Minimum time between commands
+
+    // Room tracker integration
+    private RoomTracker? _roomTracker;
 
     public MovementQueueService(TelnetClient telnetClient, ILogger<MovementQueueService> logger)
     {
         _telnetClient = telnetClient;
         _logger = logger;
+    }
+
+    /// <summary>
+    /// Sets the room tracker for event-driven movement
+    /// </summary>
+    public void SetRoomTracker(RoomTracker roomTracker)
+    {
+        if (_roomTracker != null)
+        {
+            _roomTracker.RoomChanged -= OnRoomChanged;
+        }
+
+        _roomTracker = roomTracker;
+        if (_roomTracker != null)
+        {
+            _roomTracker.RoomChanged += OnRoomChanged;
+        }
     }
 
     /// <summary>
@@ -45,9 +71,23 @@ public class MovementQueueService
                     QueueCount = _commandQueue.Count,
                     IsExecuting = _executionTask != null && !_executionTask.IsCompleted,
                     CurrentCommand = _currentCommand?.Direction,
-                    LastCommandTime = _lastCommandTime
+                    LastCommandTime = _lastCommandTime,
+                    IsWaitingForRoomDetection = _isWaitingForRoomDetection,
+                    MovementMode = _movementMode
                 };
             }
+        }
+    }
+
+    /// <summary>
+    /// Sets the movement mode
+    /// </summary>
+    public void SetMovementMode(MovementMode mode)
+    {
+        lock (_sync)
+        {
+            _movementMode = mode;
+            _logger.LogInformation("Movement mode set to: {Mode}", mode);
         }
     }
 
@@ -94,7 +134,8 @@ public class MovementQueueService
             _commandQueue.Enqueue(command);
         }
 
-        _logger.LogInformation("Queued {Count} movement commands", commands.Count());
+        _logger.LogInformation("Queued {Count} movement commands for {Mode} execution", 
+            commands.Count(), _movementMode);
         
         // Start execution if not already running
         StartExecution();
@@ -108,7 +149,7 @@ public class MovementQueueService
         var command = new MovementCommand
         {
             Direction = direction,
-            EstimatedDelay = delay ?? _defaultCommandDelay
+            EstimatedDelay = delay ?? TimeSpan.FromMilliseconds(100)
         };
 
         _commandQueue.Enqueue(command);
@@ -136,7 +177,7 @@ public class MovementQueueService
 
             _executionCts = new CancellationTokenSource();
             _executionTask = Task.Run(() => ExecuteCommandsAsync(_executionCts.Token));
-            _logger.LogDebug("Started movement command execution");
+            _logger.LogDebug("Started movement command execution in {Mode} mode", _movementMode);
         }
     }
 
@@ -151,6 +192,11 @@ public class MovementQueueService
             
             // Clear the queue
             while (_commandQueue.TryDequeue(out _)) { }
+            
+            // Cancel any pending room detection wait
+            _waitingForRoomChange?.TrySetCanceled();
+            _waitingForRoomChange = null;
+            _isWaitingForRoomDetection = false;
             
             _currentCommand = null;
             
@@ -167,6 +213,12 @@ public class MovementQueueService
         lock (_sync)
         {
             _executionCts?.Cancel();
+            
+            // Cancel any pending room detection wait
+            _waitingForRoomChange?.TrySetCanceled();
+            _waitingForRoomChange = null;
+            _isWaitingForRoomDetection = false;
+            
             _logger.LogInformation("Movement execution paused: {Reason}", reason);
             ExecutionInterrupted?.Invoke(reason);
         }
@@ -191,14 +243,22 @@ public class MovementQueueService
     }
 
     /// <summary>
-    /// Sets the default delay between commands
+    /// Event handler for room changes - triggers next movement command
     /// </summary>
-    public void SetDefaultDelay(TimeSpan delay)
+    private void OnRoomChanged(RoomState newRoom)
     {
-        _defaultCommandDelay = TimeSpan.FromMilliseconds(
-            Math.Clamp(delay.TotalMilliseconds, _minCommandDelay.TotalMilliseconds, _maxCommandDelay.TotalMilliseconds));
-        
-        _logger.LogDebug("Default command delay set to {Delay}ms", _defaultCommandDelay.TotalMilliseconds);
+        lock (_sync)
+        {
+            _lastRoomChangeTime = DateTime.UtcNow;
+            
+            if (_isWaitingForRoomDetection && _waitingForRoomChange != null)
+            {
+                _logger.LogDebug("Room change detected - triggering next movement command");
+                _waitingForRoomChange.TrySetResult(true);
+                _waitingForRoomChange = null;
+                _isWaitingForRoomDetection = false;
+            }
+        }
     }
 
     private async Task ExecuteCommandsAsync(CancellationToken cancellationToken)
@@ -217,36 +277,16 @@ public class MovementQueueService
                     _currentCommand = command;
                 }
 
-                // Wait for appropriate delay since last command
-                var timeSinceLastCommand = DateTime.UtcNow - _lastCommandTime;
-                var requiredDelay = command.EstimatedDelay;
-                
-                if (timeSinceLastCommand < requiredDelay)
-                {
-                    var waitTime = requiredDelay - timeSinceLastCommand;
-                    _logger.LogDebug("Waiting {WaitTime}ms before executing {Direction}", 
-                        waitTime.TotalMilliseconds, command.Direction);
-                    
-                    await Task.Delay(waitTime, cancellationToken);
-                }
+                // Wait for minimum interval since last command
+                await WaitForMinimumInterval(cancellationToken);
 
                 // Execute the command
-                try
+                await ExecuteCommand(command, cancellationToken);
+
+                // Wait for room detection (unless this is the last command)
+                if (!_commandQueue.IsEmpty)
                 {
-                    CommandExecuting?.Invoke(command.Direction);
-                    
-                    _telnetClient.SendCommand(command.Direction);
-                    _lastCommandTime = DateTime.UtcNow;
-                    
-                    _logger.LogDebug("Executed movement command: {Direction} (from {From} to {To})", 
-                        command.Direction, command.FromRoomId ?? "unknown", command.ToRoomId ?? "unknown");
-                    
-                    CommandExecuted?.Invoke(command.Direction);
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogError(ex, "Error executing movement command: {Direction}", command.Direction);
-                    // Continue with next command - don't fail the entire queue
+                    await WaitForRoomDetection(command, cancellationToken);
                 }
 
                 lock (_sync)
@@ -271,9 +311,198 @@ public class MovementQueueService
                 _executionTask = null;
                 _executionCts?.Dispose();
                 _executionCts = null;
+                _isWaitingForRoomDetection = false;
+                _waitingForRoomChange = null;
             }
         }
     }
+
+    private async Task WaitForMinimumInterval(CancellationToken cancellationToken)
+    {
+        var timeSinceLastCommand = DateTime.UtcNow - _lastCommandTime;
+        if (timeSinceLastCommand < _minCommandInterval)
+        {
+            var waitTime = _minCommandInterval - timeSinceLastCommand;
+            _logger.LogDebug("Waiting {WaitTime}ms for minimum command interval", waitTime.TotalMilliseconds);
+            await Task.Delay(waitTime, cancellationToken);
+        }
+    }
+
+    private async Task ExecuteCommand(MovementCommand command, CancellationToken cancellationToken)
+    {
+        try
+        {
+            CommandExecuting?.Invoke(command.Direction);
+            
+            _telnetClient.SendCommand(command.Direction);
+            _lastCommandTime = DateTime.UtcNow;
+            
+            _logger.LogDebug("Executed movement command: {Direction} (from {From} to {To})", 
+                command.Direction, command.FromRoomId ?? "unknown", command.ToRoomId ?? "unknown");
+            
+            CommandExecuted?.Invoke(command.Direction);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error executing movement command: {Direction}", command.Direction);
+            throw; // Re-throw to stop execution on command errors
+        }
+    }
+
+    private async Task WaitForRoomDetection(MovementCommand command, CancellationToken cancellationToken)
+    {
+        switch (_movementMode)
+        {
+            case MovementMode.Triggered:
+                await WaitForTriggeredRoomDetection(command, cancellationToken);
+                break;
+                
+            case MovementMode.FastWithFallback:
+                await WaitForFastRoomDetection(command, cancellationToken);
+                break;
+                
+            case MovementMode.UltraFast:
+                await WaitForUltraFastMovement(command, cancellationToken);
+                break;
+                
+            case MovementMode.TimedOnly:
+                await WaitForTimedDelay(command, cancellationToken);
+                break;
+        }
+    }
+
+    private async Task WaitForTriggeredRoomDetection(MovementCommand command, CancellationToken cancellationToken)
+    {
+        lock (_sync)
+        {
+            _waitingForRoomChange = new TaskCompletionSource<bool>();
+            _isWaitingForRoomDetection = true;
+        }
+
+        try
+        {
+            _logger.LogDebug("Waiting for room detection after {Direction} command", command.Direction);
+            
+            // Wait for room change event or timeout
+            var timeoutTask = Task.Delay(_fallbackTimeout, cancellationToken);
+            var roomChangeTask = _waitingForRoomChange.Task;
+            
+            var completedTask = await Task.WhenAny(roomChangeTask, timeoutTask);
+            
+            if (completedTask == timeoutTask)
+            {
+                _logger.LogWarning("Room detection timeout after {Direction} - continuing anyway", command.Direction);
+            }
+            else
+            {
+                _logger.LogDebug("Room change detected after {Direction} - proceeding to next command", command.Direction);
+            }
+        }
+        finally
+        {
+            lock (_sync)
+            {
+                _isWaitingForRoomDetection = false;
+                _waitingForRoomChange = null;
+            }
+        }
+    }
+
+    private async Task WaitForFastRoomDetection(MovementCommand command, CancellationToken cancellationToken)
+    {
+        // Fast mode: minimal delay with room detection fallback
+        var fastDelay = TimeSpan.FromMilliseconds(200);
+        var timeSinceLastRoomChange = DateTime.UtcNow - _lastRoomChangeTime;
+        
+        if (timeSinceLastRoomChange < fastDelay)
+        {
+            // Recent room change, proceed immediately
+            _logger.LogDebug("Recent room change detected - proceeding immediately");
+            return;
+        }
+        
+        // Wait for fast delay with room detection trigger
+        lock (_sync)
+        {
+            _waitingForRoomChange = new TaskCompletionSource<bool>();
+            _isWaitingForRoomDetection = true;
+        }
+
+        try
+        {
+            var fastDelayTask = Task.Delay(fastDelay, cancellationToken);
+            var roomChangeTask = _waitingForRoomChange.Task;
+            
+            var completedTask = await Task.WhenAny(roomChangeTask, fastDelayTask);
+            
+            if (completedTask == roomChangeTask)
+            {
+                _logger.LogDebug("Room change triggered fast movement");
+            }
+            else
+            {
+                _logger.LogDebug("Fast delay elapsed - proceeding");
+            }
+        }
+        finally
+        {
+            lock (_sync)
+            {
+                _isWaitingForRoomDetection = false;
+                _waitingForRoomChange = null;
+            }
+        }
+    }
+
+    private async Task WaitForUltraFastMovement(MovementCommand command, CancellationToken cancellationToken)
+    {
+        // Ultra-fast mode: minimal delay based only on command characteristics
+        var delay = TimeSpan.FromMilliseconds(50); // Base ultra-fast delay
+        
+        // Only add delays for actual server-side actions
+        if (command.RequiresDoor)
+            delay = delay.Add(TimeSpan.FromMilliseconds(200)); // Door opening takes time
+            
+        if (command.IsHidden)
+            delay = delay.Add(TimeSpan.FromMilliseconds(300)); // Hidden exit searching takes time
+        
+        _logger.LogDebug("Ultra-fast movement: waiting {Delay}ms before next command", delay.TotalMilliseconds);
+        await Task.Delay(delay, cancellationToken);
+    }
+
+    private async Task WaitForTimedDelay(MovementCommand command, CancellationToken cancellationToken)
+    {
+        // Original timed mode
+        var delay = command.EstimatedDelay;
+        _logger.LogDebug("Waiting {Delay}ms (timed mode) before next command", delay.TotalMilliseconds);
+        await Task.Delay(delay, cancellationToken);
+    }
+}
+
+/// <summary>
+/// Movement execution modes
+/// </summary>
+public enum MovementMode
+{
+    /// <summary>
+    /// Wait for room detection events before sending next command (optimal for reliability)
+    /// </summary>
+    Triggered,
+    
+    /// <summary>
+    /// Fast movement with room detection fallback (optimal for safe areas)
+    /// </summary>
+    FastWithFallback,
+    
+    /// <summary>
+    /// Ultra-fast movement with minimal delays (trust the path completely)
+    /// </summary>
+    UltraFast,
+    
+    /// <summary>
+    /// Use only timed delays (original behavior)
+    /// </summary>
+    TimedOnly
 }
 
 /// <summary>
@@ -282,7 +511,7 @@ public class MovementQueueService
 public class MovementCommand
 {
     public string Direction { get; set; } = string.Empty;
-    public TimeSpan EstimatedDelay { get; set; } = TimeSpan.FromSeconds(1.5);
+    public TimeSpan EstimatedDelay { get; set; } = TimeSpan.FromMilliseconds(100);
     public bool RequiresDoor { get; set; }
     public bool IsHidden { get; set; }
     public string? FromRoomId { get; set; }
@@ -299,4 +528,6 @@ public class MovementQueueStatus
     public bool IsExecuting { get; set; }
     public string? CurrentCommand { get; set; }
     public DateTime LastCommandTime { get; set; }
+    public bool IsWaitingForRoomDetection { get; set; }
+    public MovementMode MovementMode { get; set; }
 }

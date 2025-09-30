@@ -35,6 +35,11 @@ public class NavigationService
     private bool _isPausedForSafety = false;
     private string? _safetyPauseReason;
 
+    // Room detection timeout handling
+    private DateTime _lastMovementCommandTime = DateTime.MinValue;
+    private readonly TimeSpan _roomDetectionTimeout = TimeSpan.FromSeconds(10);
+    private string? _pendingMovementDirection;
+
     public NavigationService(
         GraphDataService graphData,
         PathfindingService pathfinding,
@@ -55,6 +60,12 @@ public class NavigationService
         _statsTracker = statsTracker;
         _combatTracker = combatTracker;
         _logger = logger;
+
+        // Configure movement queue with room tracker for event-driven movement
+        _movementQueue.SetRoomTracker(_roomTracker);
+        
+        // Set movement mode based on player preferences
+        SetOptimalMovementMode();
 
         // Subscribe to events
         _roomTracker.RoomChanged += OnRoomChanged;
@@ -454,9 +465,24 @@ public class NavigationService
     {
         lock (_sync)
         {
+            // Clear room detection timeout - room change detected successfully
+            _lastMovementCommandTime = DateTime.MinValue;
+            _pendingMovementDirection = null;
+
             if (CurrentState == NavigationState.Navigating && _currentPath != null)
             {
-                // Update step progress based on room change
+                // FIRST: Update navigation context BEFORE room matching
+                // This ensures the room matching service has the correct context
+                UpdateRoomMatchingContext(newRoom);
+
+                // THEN: Use fast path room matching during navigation
+                var currentMatch = _roomMatching.FindMatchingNodeFast(newRoom);
+                
+                // Log simplified matching information for navigation
+                _logger.LogDebug("Navigation room change: Step {Step}, Room: '{RoomName}', Match: {MatchId} (confidence: {Confidence:P1}, type: {Type})",
+                    _currentStepIndex, newRoom.Name, currentMatch?.Node.Id ?? "none", currentMatch?.Confidence ?? 0.0, currentMatch?.MatchType ?? "none");
+
+                // NOW: Update step progress based on successful room change
                 _currentStepIndex++;
                 _lastNavigationUpdate = DateTime.UtcNow;
 
@@ -467,30 +493,39 @@ public class NavigationService
                     return;
                 }
 
-                // Verify we're still on the correct path
-                var currentMatch = _roomMatching.FindMatchingNode(newRoom);
-                if (currentMatch != null && currentMatch.Confidence > 0.7)
+                // Simple validation: if we got a good match, we're probably on track
+                if (currentMatch != null && currentMatch.Confidence > 0.8)
                 {
-                    var expectedRoomId = _currentStepIndex < _currentPath.Steps.Count
-                        ? _currentPath.Steps[_currentStepIndex].FromRoomId
-                        : _currentDestinationId;
-
-                    if (currentMatch.Node.Id != expectedRoomId)
-                    {
-                        _logger.LogWarning("Navigation off course: expected {Expected}, found {Actual}",
-                            expectedRoomId, currentMatch.Node.Id);
-                        
-                        // For Phase 2, we'll just alert - re-routing can be added in Phase 3
-                        NavigationAlert?.Invoke("Navigation may be off course");
-                    }
+                    _logger.LogDebug("Navigation on track: room {RoomId} matched with high confidence", currentMatch.Node.Id);
                 }
+                else if (currentMatch != null && currentMatch.Confidence > 0.6)
+                {
+                    _logger.LogDebug("Navigation proceeding: room {RoomId} matched with acceptable confidence {Confidence:P1}", 
+                        currentMatch.Node.Id, currentMatch.Confidence);
+                }
+                else
+                {
+                    _logger.LogWarning("Navigation uncertainty: low confidence room match {Confidence:P1} for '{RoomName}'", 
+                        currentMatch?.Confidence ?? 0.0, newRoom.Name);
+                    NavigationAlert?.Invoke($"Uncertain location during navigation");
+                }
+            }
+            else
+            {
+                // Not navigating, but still update context for future matches
+                UpdateRoomMatchingContext(newRoom);
             }
         }
     }
 
     private void OnMovementCommandExecuted(string direction)
     {
-        _logger.LogDebug("Movement command executed: {Direction}", direction);
+        lock (_sync)
+        {
+            _lastMovementCommandTime = DateTime.UtcNow;
+            _pendingMovementDirection = direction;
+            _logger.LogDebug("Movement command executed: {Direction} at {Time}", direction, _lastMovementCommandTime);
+        }
     }
 
     private void OnMovementInterrupted(string reason)
@@ -573,6 +608,20 @@ public class NavigationService
             {
                 ResumeNavigation();
             }
+        }
+
+        // Check for room detection timeout during navigation
+        if (CurrentState == NavigationState.Navigating && 
+            _lastMovementCommandTime != DateTime.MinValue &&
+            DateTime.UtcNow - _lastMovementCommandTime > _roomDetectionTimeout)
+        {
+            _logger.LogWarning("Room detection timeout detected - no room change after {Timeout}s from movement command", 
+                _roomDetectionTimeout.TotalSeconds);
+            
+            NavigationAlert?.Invoke($"Room detection timeout - navigation may need manual intervention");
+            
+            // Reset the timer to avoid spam alerts
+            _lastMovementCommandTime = DateTime.UtcNow;
         }
     }
 
@@ -689,6 +738,127 @@ public class NavigationService
         var remainingSteps = _currentPath.Steps.Skip(_currentStepIndex);
         var remainingSeconds = remainingSteps.Sum(step => step.EstimatedDelaySeconds);
         return TimeSpan.FromSeconds(remainingSeconds);
+    }
+
+    /// <summary>
+    /// Updates the room matching service with current navigation context
+    /// </summary>
+    private void UpdateRoomMatchingContext(RoomState newRoom)
+    {
+        try
+        {
+            string? previousRoomId = null;
+            string? lastDirection = null;
+            string? expectedRoomId = null;
+
+            if (_currentPath != null && CurrentState == NavigationState.Navigating)
+            {
+                // Current step index tells us which step we just completed or are about to complete
+                if (_currentStepIndex >= 0 && _currentStepIndex < _currentPath.Steps.Count)
+                {
+                    var currentStep = _currentPath.Steps[_currentStepIndex];
+                    
+                    // Previous room is where we came from (FromRoomId of current step)
+                    previousRoomId = currentStep.FromRoomId;
+                    lastDirection = currentStep.Direction;
+                    
+                    // Expected room is where this step should take us (ToRoomId of current step)
+                    expectedRoomId = currentStep.ToRoomId;
+                    
+                    _logger.LogDebug("Step {StepIndex}: {From} --{Direction}--> {To} (expected)", 
+                        _currentStepIndex, previousRoomId, lastDirection, expectedRoomId);
+                }
+                else if (_currentStepIndex >= _currentPath.Steps.Count)
+                {
+                    // We've completed all steps - expected room is the final destination
+                    expectedRoomId = _currentDestinationId;
+                    
+                    if (_currentPath.Steps.Count > 0)
+                    {
+                        var lastStep = _currentPath.Steps[_currentPath.Steps.Count - 1];
+                        previousRoomId = lastStep.FromRoomId;
+                        lastDirection = lastStep.Direction;
+                    }
+                    
+                    _logger.LogDebug("Navigation complete: expecting final destination {Destination}", expectedRoomId);
+                }
+            }
+
+            var context = new NavigationContext
+            {
+                PreviousRoomId = previousRoomId,
+                ExpectedRoomId = expectedRoomId,
+                LastDirection = lastDirection,
+                CurrentPath = _currentPath,
+                CurrentStepIndex = _currentStepIndex,
+                PreviousConfidence = 0.8, // TODO: Store actual previous confidence
+                LastMovement = DateTime.UtcNow
+            };
+
+            _roomMatching.UpdateNavigationContext(context);
+
+            _logger.LogDebug("Updated room matching context: Prev={Previous}, Expected={Expected}, Direction={Direction}, Step={Step}",
+                previousRoomId, expectedRoomId, lastDirection, _currentStepIndex);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error updating room matching context");
+        }
+    }
+
+    /// <summary>
+    /// Sets the movement mode for navigation
+    /// </summary>
+    public void SetMovementMode(MovementMode mode)
+    {
+        _movementQueue.SetMovementMode(mode);
+        _logger.LogInformation("Navigation movement mode set to: {Mode}", mode);
+    }
+
+    /// <summary>
+    /// Sets optimal movement mode based on current context
+    /// </summary>
+    private void SetOptimalMovementMode()
+    {
+        // Default to triggered mode for reliability
+        var mode = MovementMode.Triggered;
+        
+        // Check if in a peaceful region for fast movement
+        if (_roomTracker.CurrentRoom != null)
+        {
+            var currentMatch = _roomMatching.FindMatchingNode(_roomTracker.CurrentRoom);
+            if (currentMatch?.Node != null && currentMatch.Node.IsPeaceful)
+            {
+                mode = MovementMode.FastWithFallback;
+                _logger.LogDebug("Peaceful area detected - using fast movement mode");
+            }
+        }
+        
+        _movementQueue.SetMovementMode(mode);
+    }
+
+    /// <summary>
+    /// Enables ultra-fast movement mode for maximum speed (trusts path completely)
+    /// </summary>
+    public void EnableUltraFastMovement()
+    {
+        SetMovementMode(MovementMode.UltraFast);
+    }
+
+    /// <summary>
+    /// Enables fast movement mode for safe areas like towns
+    /// </summary>
+    public void EnableFastMovement()
+    {
+        SetMovementMode(MovementMode.FastWithFallback);
+    }
+
+    /// <summary>
+    /// Enables triggered movement mode for maximum reliability
+    /// </summary>
+    public void EnableTriggeredMovement()
+    {
+        SetMovementMode(MovementMode.Triggered);
     }
 }
 

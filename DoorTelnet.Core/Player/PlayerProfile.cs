@@ -180,13 +180,13 @@ public class Thresholds
     public int PanicHp { get; set; }
     public int ShieldRefreshSec { get; set; }
     // Minimum HP percentage (0-100) required to continue gong automation cycle
-    public int GongMinHpPercent { get; set; } = 60;
+    public int GongMinHpPercent { get; set; } = 95;
     // Critical health percentage for emergency healing
-    public int CriticalHpPercent { get; set; } = 25;
+    public int CriticalHpPercent { get; set; } = 30;
     // Auto-heal health percentage threshold
-    public int AutoHealHpPercent { get; set; } = 70;
+    public int AutoHealHpPercent { get; set; } = 95;
     // Warning heal percentage - stops gong and waits for timers before healing
-    public int WarningHealHpPercent { get; set; } = 50;
+    public int WarningHealHpPercent { get; set; } = 70;
     // Critical action when CriticalHpPercent is reached
     public string CriticalAction { get; set; } = "stop"; // "stop", "disconnect", "script:{command}"
     

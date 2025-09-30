@@ -90,20 +90,22 @@ public class NavigationStep
     /// </summary>
     private static double CalculateDelayForEdge(GraphEdge edge, GraphNode fromRoom, GraphNode toRoom)
     {
-        double baseDelay = .5; // Base movement delay
+        // Minimal base delay - just enough for command processing
+        double baseDelay = 0.1; // Reduced to minimal - rely on room detection triggers instead
 
-        // Add delay for doors
+        // Add delay for doors (need time to open)
         if (edge.RequiresDoor)
+            baseDelay += 0.3;
+
+        // Add delay for hidden exits (need time to search)
+        if (edge.IsHidden)
             baseDelay += 0.5;
 
-        // Add delay for hidden exits (might need searching)
-        if (edge.IsHidden)
-            baseDelay += 1.0;
-
-        // Add delay for dangerous rooms (combat might occur)
+        // Add delay for dangerous rooms (potential combat interruption)
         if (!toRoom.IsPeaceful && toRoom.SpawnTotal > 0)
-            baseDelay += Math.Min(toRoom.SpawnTotal * 0.2, 2.0);
+            baseDelay += Math.Min(toRoom.SpawnTotal * 0.1, 1.0);
 
-        return baseDelay;
+        // Minimum delay for server processing
+        return Math.Max(baseDelay, 0.1);
     }
 }

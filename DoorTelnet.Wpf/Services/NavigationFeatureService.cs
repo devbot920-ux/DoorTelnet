@@ -197,6 +197,47 @@ public class NavigationFeatureService : IDisposable, INotifyPropertyChanged
         }
     }
 
+    /// <summary>
+    /// Sets the movement mode for navigation
+    /// </summary>
+    public void SetMovementMode(MovementMode mode)
+    {
+        try
+        {
+            _navigationService.SetMovementMode(mode);
+            _logger.LogInformation("Movement mode set to: {Mode}", mode);
+            NavigationStatusChanged?.Invoke($"Movement mode: {mode}");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error setting movement mode to {Mode}", mode);
+        }
+    }
+
+    /// <summary>
+    /// Enables ultra-fast movement mode for maximum speed
+    /// </summary>
+    public void EnableUltraFastMovement()
+    {
+        SetMovementMode(MovementMode.UltraFast);
+    }
+
+    /// <summary>
+    /// Enables fast movement mode for safe areas
+    /// </summary>
+    public void EnableFastMovement()
+    {
+        SetMovementMode(MovementMode.FastWithFallback);
+    }
+
+    /// <summary>
+    /// Enables triggered movement mode for maximum reliability
+    /// </summary>
+    public void EnableTriggeredMovement()
+    {
+        SetMovementMode(MovementMode.Triggered);
+    }
+
     private void OnPropertyChanged(string propertyName)
     {
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));

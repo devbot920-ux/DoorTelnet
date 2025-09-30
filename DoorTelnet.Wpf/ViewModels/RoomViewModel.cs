@@ -33,6 +33,14 @@ public partial class RoomViewModel : ViewModelBase
         public string DisplayName => Count.HasValue && Count.Value > 1 ? $"{Name} x{Count}" : Name;
     }
 
+    public class MovementModeOption
+    {
+        public MovementMode Mode { get; set; }
+        public string Name { get; set; } = string.Empty;
+        public string Description { get; set; } = string.Empty;
+        public string Icon { get; set; } = string.Empty;
+    }
+
     public RoomViewModel(RoomTracker roomTracker, ILogger<RoomViewModel> logger, NavigationFeatureService? navigationService = null, RoomMatchingService? roomMatchingService = null) : base(logger)
     {
         _roomTracker = roomTracker;
@@ -43,6 +51,9 @@ public partial class RoomViewModel : ViewModelBase
         Items = new ObservableCollection<string>();
         Exits = new ObservableCollection<string>();
         NavigationSuggestions = new ObservableCollection<NavigationSuggestion>();
+        
+        // Initialize movement mode options
+        InitializeMovementModes();
         
         // Set up search timer for debounced autocomplete
         _searchTimer = new DispatcherTimer
@@ -59,6 +70,20 @@ public partial class RoomViewModel : ViewModelBase
         }
         
         Refresh();
+    }
+
+    private void InitializeMovementModes()
+    {
+        MovementModes = new ObservableCollection<MovementModeOption>
+        {
+            new() { Mode = MovementMode.UltraFast, Name = "Ultra-Fast", Description = "50ms delays (paste-friendly)", Icon = "?" },
+            new() { Mode = MovementMode.FastWithFallback, Name = "Fast", Description = "200ms delays (safe areas)", Icon = "??" },
+            new() { Mode = MovementMode.Triggered, Name = "Reliable", Description = "Wait for room detection", Icon = "???" },
+            new() { Mode = MovementMode.TimedOnly, Name = "Timed", Description = "Original fixed delays", Icon = "??" }
+        };
+        
+        // Set default to Triggered mode
+        SelectedMovementMode = MovementModes.FirstOrDefault(m => m.Mode == MovementMode.Triggered);
     }
 
     private string _roomName = "Unknown"; 
@@ -100,6 +125,33 @@ public partial class RoomViewModel : ViewModelBase
             {
                 OnSelectedSuggestionChanged(value);
             }
+        }
+    }
+
+    // Movement mode selection properties
+    public ObservableCollection<MovementModeOption> MovementModes { get; private set; } = new();
+    
+    private MovementModeOption? _selectedMovementMode;
+    public MovementModeOption? SelectedMovementMode 
+    { 
+        get => _selectedMovementMode; 
+        set 
+        {
+            if (SetProperty(ref _selectedMovementMode, value))
+            {
+                OnMovementModeChanged(value);
+            }
+        }
+    }
+
+    private void OnMovementModeChanged(MovementModeOption? selectedMode)
+    {
+        if (selectedMode != null && _navigationService != null)
+        {
+            // Set the movement mode in the navigation service
+            _navigationService.SetMovementMode(selectedMode.Mode);
+            _logger.LogInformation("Movement mode changed to: {Mode} ({Description})", 
+                selectedMode.Name, selectedMode.Description);
         }
     }
 
@@ -238,8 +290,8 @@ public partial class RoomViewModel : ViewModelBase
         {
             if (_navigationService.StartNavigationToSuggestion(SelectedSuggestion))
             {
-                _logger.LogInformation("Started navigation to: {RoomName} (ID: {RoomId})", 
-                    SelectedSuggestion.RoomName, SelectedSuggestion.RoomId);
+                _logger.LogInformation("Started navigation to: {RoomName} (ID: {RoomId}) using {MovementMode}", 
+                    SelectedSuggestion.RoomName, SelectedSuggestion.RoomId, SelectedMovementMode?.Name ?? "Default");
             }
         }
         else
@@ -247,7 +299,8 @@ public partial class RoomViewModel : ViewModelBase
             // Fall back to original text-based navigation
             if (_navigationService.StartNavigation(NavigationDestination))
             {
-                _logger.LogInformation("Started navigation to: {Destination}", NavigationDestination);
+                _logger.LogInformation("Started navigation to: {Destination} using {MovementMode}", 
+                    NavigationDestination, SelectedMovementMode?.Name ?? "Default");
             }
         }
         
@@ -323,6 +376,24 @@ public partial class RoomViewModel : ViewModelBase
         {
             _logger.LogError(ex, "Error finding nearby stores");
         }
+    }
+
+    [RelayCommand]
+    private void SelectUltraFastMode()
+    {
+        SelectedMovementMode = MovementModes.FirstOrDefault(m => m.Mode == MovementMode.UltraFast);
+    }
+
+    [RelayCommand]
+    private void SelectFastMode()
+    {
+        SelectedMovementMode = MovementModes.FirstOrDefault(m => m.Mode == MovementMode.FastWithFallback);
+    }
+
+    [RelayCommand]
+    private void SelectReliableMode()
+    {
+        SelectedMovementMode = MovementModes.FirstOrDefault(m => m.Mode == MovementMode.Triggered);
     }
 
     private bool CanNavigate() => 

@@ -64,6 +64,7 @@
                 <RowDefinition Height="Auto"/>
                 <RowDefinition Height="Auto"/>
                 <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
             </Grid.RowDefinitions>
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="*"/>
@@ -71,8 +72,51 @@
                 <ColumnDefinition Width="Auto"/>
             </Grid.ColumnDefinitions>
             
+            <!-- Movement Mode Selector -->
+            <TextBlock Grid.Row="0" Grid.Column="0" Grid.ColumnSpan="3" 
+                       Text="Movement Mode:" FontWeight="SemiBold" FontSize="10" 
+                       Margin="0 0 0 2" Foreground="#CCC"/>
+            
+            <ComboBox Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="3"
+                      ItemsSource="{Binding MovementModes}"
+                      SelectedItem="{Binding SelectedMovementMode}"
+                      FontSize="10" Margin="0 0 0 4"
+                      ToolTip="Select movement speed vs reliability">
+                <ComboBox.ItemTemplate>
+                    <DataTemplate>
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="{Binding Icon}" FontSize="12" Margin="0 0 6 0" VerticalAlignment="Center"/>
+                            <StackPanel>
+                                <TextBlock Text="{Binding Name}" FontWeight="SemiBold" FontSize="10"/>
+                                <TextBlock Text="{Binding Description}" FontSize="9" Foreground="#888"/>
+                            </StackPanel>
+                        </StackPanel>
+                    </DataTemplate>
+                </ComboBox.ItemTemplate>
+            </ComboBox>
+            
+            <!-- Quick mode selection buttons -->
+            <StackPanel Grid.Row="2" Grid.Column="0" Grid.ColumnSpan="3" 
+                        Orientation="Horizontal" Margin="0 2 0 4">
+                <Button Content="? Ultra" 
+                        Command="{Binding SelectUltraFastModeCommand}"
+                        FontSize="8" Padding="4,1" Margin="0 0 2 0"
+                        ToolTip="Ultra-Fast: 50ms delays (paste-friendly)"
+                        Background="#4a148c" BorderBrush="#6a1b9a"/>
+                <Button Content="?? Fast" 
+                        Command="{Binding SelectFastModeCommand}"
+                        FontSize="8" Padding="4,1" Margin="0 0 2 0"
+                        ToolTip="Fast: 200ms delays (safe areas)"
+                        Background="#1565c0" BorderBrush="#1976d2"/>
+                <Button Content="??? Safe" 
+                        Command="{Binding SelectReliableModeCommand}"
+                        FontSize="8" Padding="4,1"
+                        ToolTip="Reliable: Wait for room detection"
+                        Background="#2e7d32" BorderBrush="#388e3c"/>
+            </StackPanel>
+            
             <!-- Autocomplete Navigation ComboBox -->
-            <ComboBox Grid.Row="0" Grid.Column="0" 
+            <ComboBox Grid.Row="3" Grid.Column="0" 
                       Text="{Binding NavigationDestination, UpdateSourceTrigger=PropertyChanged}" 
                       ItemsSource="{Binding NavigationSuggestions}"
                       SelectedItem="{Binding SelectedSuggestion}"
@@ -109,19 +153,19 @@
             </ComboBox>
             
             <!-- Navigate button -->
-            <Button Grid.Row="0" Grid.Column="1" 
+            <Button Grid.Row="3" Grid.Column="1" 
                     Content="Go" 
                     Command="{Binding StartNavigationCommand}"
                     FontSize="10" Padding="8,2" Margin="2 0"/>
             
             <!-- Stop button -->
-            <Button Grid.Row="0" Grid.Column="2" 
+            <Button Grid.Row="3" Grid.Column="2" 
                     Content="Stop" 
                     Command="{Binding StopNavigationCommand}"
                     FontSize="10" Padding="8,2" Margin="2 0 0 0"/>
             
             <!-- Quick actions row -->
-            <StackPanel Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="3" 
+            <StackPanel Grid.Row="4" Grid.Column="0" Grid.ColumnSpan="3" 
                         Orientation="Horizontal" Margin="0 2">
                 <Button Content="Find Stores" 
                         Command="{Binding FindStoresCommand}"
@@ -134,7 +178,7 @@
             </StackPanel>
             
             <!-- Status display -->
-            <TextBlock Grid.Row="2" Grid.Column="0" Grid.ColumnSpan="3"
+            <TextBlock Grid.Row="5" Grid.Column="0" Grid.ColumnSpan="3"
                        Text="{Binding NavigationStatus}" 
                        FontSize="10" Foreground="#888" 
                        TextWrapping="Wrap" Margin="0 4 0 0"/>
