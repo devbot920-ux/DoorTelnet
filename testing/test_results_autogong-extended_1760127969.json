@@ -1,0 +1,152 @@
+{
+  "test": "extended_autogong",
+  "duration": 122,
+  "monitoring_data": {
+    "cycles": 2,
+    "monsters_killed": 1,
+    "combat_events": [
+      {
+        "time": 5,
+        "target": "gremlin",
+        "hp": 1532,
+        "hpPercent": 100
+      },
+      {
+        "time": 10,
+        "target": "forest frig",
+        "hp": 1532,
+        "hpPercent": 100
+      },
+      {
+        "time": 24,
+        "target": "forest frig",
+        "hp": 1532,
+        "hpPercent": 100
+      },
+      {
+        "time": 29,
+        "target": "bully",
+        "hp": 1532,
+        "hpPercent": 100
+      },
+      {
+        "time": 42,
+        "target": "gremlin",
+        "hp": 1532,
+        "hpPercent": 100
+      },
+      {
+        "time": 47,
+        "target": "forest frig",
+        "hp": 1532,
+        "hpPercent": 100
+      },
+      {
+        "time": 58,
+        "target": "bully",
+        "hp": 1532,
+        "hpPercent": 100
+      },
+      {
+        "time": 63,
+        "target": "orc",
+        "hp": 1532,
+        "hpPercent": 100
+      },
+      {
+        "time": 80,
+        "target": "orc",
+        "hp": 1532,
+        "hpPercent": 100
+      },
+      {
+        "time": 85,
+        "target": "orc",
+        "hp": 1532,
+        "hpPercent": 100
+      },
+      {
+        "time": 102,
+        "target": "rat",
+        "hp": 1532,
+        "hpPercent": 100
+      },
+      {
+        "time": 107,
+        "target": "rat",
+        "hp": 1532,
+        "hpPercent": 100
+      },
+      {
+        "time": 122,
+        "target": "rat",
+        "hp": 1532,
+        "hpPercent": 100
+      }
+    ],
+    "hp_changes": [],
+    "errors": [],
+    "interventions": [],
+    "llm_decisions": [
+      {
+        "time": 10,
+        "decision": {
+          "action": "continue",
+          "reasoning": "HP is at 100%, combat is resolving correctly (monsters summoned and defeated), autoGong is active and working, no errors or critical resource issues detected.",
+          "assessment": "Current situation looks safe"
+        }
+      },
+      {
+        "time": 29,
+        "decision": {
+          "action": "continue",
+          "reasoning": "HP at 100%, combat proceeding normally, AutoGong is enabled and no errors detected.",
+          "assessment": "All systems nominal"
+        }
+      },
+      {
+        "time": 47,
+        "decision": {
+          "action": "continue",
+          "reasoning": "HP 100%, autoGong active, combat and looting working; no errors or dangerous conditions detected.",
+          "assessment": "Current situation looks safe"
+        }
+      },
+      {
+        "time": 63,
+        "decision": {
+          "action": "continue",
+          "reasoning": "HP 100%, combats are resolving cleanly, AutoGong active, no errors and ample gold\u2014no intervention needed.",
+          "assessment": "Current situation looks safe"
+        }
+      },
+      {
+        "time": 85,
+        "decision": {
+          "action": "continue",
+          "reasoning": "HP at 100%, AutoGong is running, recent combat completed and one orc killed, no errors and ample gold present.",
+          "assessment": "All systems nominal"
+        }
+      },
+      {
+        "time": 107,
+        "decision": {
+          "action": "continue",
+          "reasoning": "HP 100%, autoGong active, summons are being engaged and rats are dying, no errors detected and gold sufficient.",
+          "assessment": "All systems nominal"
+        }
+      }
+    ]
+  },
+  "issues": [],
+  "passed": true,
+  "stats": {
+    "cycles": 2,
+    "kills": 1,
+    "combat_events": 13,
+    "hp_changes": 0,
+    "errors": 0,
+    "llm_decisions": 6,
+    "interventions": 0
+  }
+}

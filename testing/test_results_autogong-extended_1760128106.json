@@ -1,0 +1,184 @@
+{
+  "test": "extended_autogong",
+  "duration": 131,
+  "monitoring_data": {
+    "cycles": 1,
+    "monsters_killed": 1,
+    "combat_events": [
+      {
+        "time": 5,
+        "target": "orc",
+        "hp": 1532,
+        "hpPercent": 100
+      },
+      {
+        "time": 10,
+        "target": "rat",
+        "hp": 1532,
+        "hpPercent": 100
+      },
+      {
+        "time": 24,
+        "target": "forest frig",
+        "hp": 1532,
+        "hpPercent": 100
+      },
+      {
+        "time": 29,
+        "target": "rat",
+        "hp": 1532,
+        "hpPercent": 100
+      },
+      {
+        "time": 42,
+        "target": "rat",
+        "hp": 1532,
+        "hpPercent": 100
+      },
+      {
+        "time": 47,
+        "target": "forest frig",
+        "hp": 1532,
+        "hpPercent": 100
+      },
+      {
+        "time": 59,
+        "target": "forest frig",
+        "hp": 1532,
+        "hpPercent": 100
+      },
+      {
+        "time": 64,
+        "target": "rat",
+        "hp": 1532,
+        "hpPercent": 100
+      },
+      {
+        "time": 76,
+        "target": "rat",
+        "hp": 1532,
+        "hpPercent": 100
+      },
+      {
+        "time": 81,
+        "target": "rat",
+        "hp": 1532,
+        "hpPercent": 100
+      },
+      {
+        "time": 119,
+        "target": "gremlin",
+        "hp": 1532,
+        "hpPercent": 100
+      },
+      {
+        "time": 124,
+        "target": "gremlin",
+        "hp": 1532,
+        "hpPercent": 100
+      }
+    ],
+    "hp_changes": [],
+    "errors": [],
+    "interventions": [
+      {
+        "time": 81,
+        "reason": "LLM_INTERVENTION",
+        "action": "An orc is attacking but autoAttack is off, so the character isn't fighting back. HP is fine but an aggressive monster is not being engaged.",
+        "commands": [
+          "kill orc",
+          "autoattack on"
+        ],
+        "details": {
+          "action": "intervene",
+          "reasoning": "An orc is attacking but autoAttack is off, so the character isn't fighting back. HP is fine but an aggressive monster is not being engaged.",
+          "commands": [
+            "kill orc",
+            "autoattack on"
+          ],
+          "wait_for_result": 3,
+          "assessment": "Safe but requires intervention to engage the attacking monster"
+        }
+      }
+    ],
+    "llm_decisions": [
+      {
+        "time": 10,
+        "decision": {
+          "action": "continue",
+          "reasoning": "HP at 100%, auto-gong is spawning rats and combat is resolving normally, no errors or dangerous conditions detected.",
+          "assessment": "All systems nominal"
+        }
+      },
+      {
+        "time": 29,
+        "decision": {
+          "action": "continue",
+          "reasoning": "HP is 100%, no errors, autoGong is summoning rats and combat actions are occurring; no aggressive threats or low resources detected (minor inCombat flag mismatch but not harmful).",
+          "assessment": "Current situation looks safe"
+        }
+      },
+      {
+        "time": 47,
+        "decision": {
+          "action": "continue",
+          "reasoning": "HP at 100%, combat cycles are occurring and summons are being killed, autoGong is active, no errors or low-gold warnings.",
+          "assessment": "All systems nominal"
+        }
+      },
+      {
+        "time": 64,
+        "decision": {
+          "action": "continue",
+          "reasoning": "HP 100%, combat is functioning (rats summoned and killed), autoGong active, no errors or low gold. No intervention required.",
+          "assessment": "Current situation looks safe"
+        }
+      },
+      {
+        "time": 81,
+        "decision": {
+          "action": "intervene",
+          "reasoning": "An orc is attacking but autoAttack is off, so the character isn't fighting back. HP is fine but an aggressive monster is not being engaged.",
+          "commands": [
+            "kill orc",
+            "autoattack on"
+          ],
+          "wait_for_result": 3,
+          "assessment": "Safe but requires intervention to engage the attacking monster"
+        }
+      },
+      {
+        "time": 84,
+        "decision": {
+          "action": "continue",
+          "reasoning": "The kill orc command succeeded (logs show the orc died). Combat was momentarily disengaged, but autoattack did not actually enable (automation.autoAttack is still false). The autoGong rang and summoned a gremlin, putting the character back in combat. HP is full, so no immediate danger.",
+          "assessment": "Intervention successful",
+          "next_concern": "autoAttack remains off\u2014enable it before further automated testing; monitor combat target consistency and HP in the next engagement (and watch for repeated autoGong summons)."
+        },
+        "type": "followup"
+      },
+      {
+        "time": 124,
+        "decision": {
+          "action": "continue",
+          "reasoning": "HP is at 100%, no errors reported, AutoGong is functioning (gremlins being summoned and killed), and gold is sufficient.",
+          "assessment": "Current situation looks safe"
+        }
+      }
+    ]
+  },
+  "issues": [
+    "[81s] \ud83d\udc1b AUTOMATION FAILURE: An orc is attacking but autoAttack is off, so the character isn't fighting back. HP is fine but an aggressive monster is not being engaged."
+  ],
+  "passed": false,
+  "stats": {
+    "cycles": 1,
+    "kills": 1,
+    "combat_events": 12,
+    "hp_changes": 0,
+    "errors": 0,
+    "llm_decisions": 7,
+    "interventions": 1
+  },
+  "llm_analysis": "Below is an analysis of the failure, why it happened, and concrete, actionable fixes (with example code) to prevent LLM interventions for the same class of problem.\n\n1) Root cause \u2014 why AutoGong failed\n- The automation did not respond to an aggressive (hostile) monster because the system either:\n  - never enabled auto-attack when the monster went aggressive, or\n  - failed to detect the aggressive state / target change and therefore did not issue an attack command.\n- Symptoms in the log that support this:\n  - The LLM detected an orc attacking while automation.autoAttack was false and had to issue manual commands (\"kill orc\", \"autoattack on\").\n  - Follow-up says the \"kill orc\" succeeded but automation.autoAttack remained false \u2014 the automation never toggled/verified the client-side autoAttack flag.\n  - Combat events show normal summon/kills for rats/gremlins, which implies AutoGong handles summoned mobs in some flows but not when mobs are aggressive or the inCombat target changed unexpectedly.\n- Likely specific causes:\n  - No event handler or broken handler for \"monster became aggressive\" (RoomTracker/CombatTracker missed/ignored aggressive state).\n  - AutomationFeatureService either doesn\u2019t have a reliable setAutoAttack() implementation, or it sets an internal flag without issuing/confirming the client command; or it fails silently on race conditions.\n  - Race/ordering issue: the gong summoned a new mob while automation was trying to recover, and the automation lost the opportunity to enable/confirm autoAttack.\n  - Missing verification/confirmation step after issuing \"autoattack on\" (no retry or check of automation.autoAttack).\n\n2) Severity\n- Critical.\n  - Any time an aggressive monster can engage the character without automation responding, the agent is at risk of death, item loss, and unreliable automation \u2014 exactly what was observed (LLM had to intervene once). The report already classifies it as critical and that is accurate.\n\n3) Specific code areas to investigate\n- AutomationFeatureService\n  - setAutoAttack(flag)\n  - sendClientCommand('autoattack on/off')\n  - state/flag persistence and verification logic\n- CombatTracker\n  - Detection of inCombat state and target changes\n  - Reaction logic when a hostile target is detected (start attack/enable autoAttack)\n  - Race protection around issuing attack commands\n- RoomTracker\n  - Detection of monster presence and aggressiveness\n  - Emitting events when a monster becomes aggressive/changes target\n- Also check: CommandSender/ClientAPI layer that actually sends \"autoattack on\" and \"kill <monster>\" to the game and returns confirmation.\n\n4) Recommended fixes with code examples\n\nA. Make auto-attack reaction explicit and reliable\n- Guarantee: whenever any hostile or aggressive monster targets the player, automation must either (a) immediately issue an attack (kill <target>) or (b) enable autoattack and verify it is enabled, within a short timeout.\n\nExample (TypeScript/JS pseudo-code):\n\n// AutomationFeatureService.ts\nclass AutomationFeatureService {\n  private autoAttack = false;\n  private client: ClientAPI;\n\n  constructor(client: ClientAPI) { this.client = client; }\n\n  async setAutoAttack(enable: boolean): Promise<boolean> {\n    if (this.autoAttack === enable) return true;\n    // Issue command to client and wait for confirmation + retry\n    const cmd = enable ? 'autoattack on' : 'autoattack off';\n    const maxRetries = 3;\n    for (let attempt = 1; attempt <= maxRetries; attempt++) {\n      await this.client.sendCommand(cmd);\n      // small delay to allow client state to update\n      await wait(150);\n      const confirmed = await this.client.getAutomationState().then(s => s.autoAttack === enable);\n      if (confirmed) {\n        this.autoAttack = enable;\n        return true;\n      }\n    }\n    // log failure\n    logger.warn('setAutoAttack: failed to confirm client autoAttack state', { enable });\n    return false;\n  }\n\n  isAutoAttackEnabled() { return this.autoAttack; }\n}\n\nNotes:\n- Always confirm actual client state (client.getAutomationState()) \u2014 do not trust only internal flags.\n- Retry small number of times before logging/failing.\n\nB. Add explicit \"onAggro\" event handling in RoomTracker -> CombatTracker\n- RoomTracker must emit a reliable event when any monster becomes aggressive or when monster.target === player.\n\nExample:\n\n// RoomTracker.ts\nclass RoomTracker extends EventEmitter {\n  onGameMonsterUpdate(monster: MonsterState) {\n    const prev = this.monsters.get(monster.id);\n    this.monsters.set(monster.id, monster);\n\n    // detect newly aggressive\n    if (!prev?.isAggressive && monster.isAggressive) {\n      this.emit('monsterAggro', monster);\n    }\n\n    // detect if its target changed to player\n    if (monster.target === 'player' && prev?.target !== 'player') {\n      this.emit('monsterTargetedPlayer', monster);\n    }\n  }\n}\n\nThen subscribe in CombatTracker:\n\n// CombatTracker.ts\nclass CombatTracker {\n  constructor(roomTracker: RoomTracker, automation: AutomationFeatureService, client: ClientAPI) {\n    roomTracker.on('monsterAggro', (m) => this.handleAggro(m));\n    roomTracker.on('monsterTargetedPlayer', (m) => this.handleAggro(m));\n  }\n\n  async handleAggro(monster: MonsterState) {\n    logger.info('handleAggro', { monster: monster.name, hp: monster.hp });\n    // If HP is low, maybe do defensive behavior; else ensure engagement\n    if (this.shouldEngage(monster)) {\n      // prefer enable autoAttack first and confirm\n      const ok = await this.automation.setAutoAttack(true);\n      if (!ok) {\n        // fallback: send direct attack command\n        await this.client.sendCommand(`kill ${monster.name}`);\n      }\n      // also track that we have an active target\n      this.currentTarget = monster.id;\n    }\n  }\n\n  shouldEngage(monster: MonsterState) {\n    // basic rule: if monster is aggressive and not pet/non-hostile\n    return monster.isHostile && this.player.hpPct > 30; // example threshold\n  }\n}\n\nC. Make automatic engagement idempotent and fast\n- If multiple events fire, the handler should be idempotent (no repeated toggles).\n- Protect with a short-lived lock to avoid race conditions while enabling autoAttack + confirming.\n\nExample helper:\n\n// simple lock\nasync withLock(key, fn) { /* implement mutex */ }\n\nAnd in handleAggro:\n\nawait this.withLock('enable-autoattack', async () => {\n  if (this.automation.isAutoAttackEnabled()) {\n    // already enabled; ensure we have a target\n    await this.client.sendCommand(`kill ${monster.name}`);\n    return;\n  }\n  const ok = await this.automation.setAutoAttack(true);\n  if (!ok) {\n    // as fallback, send direct attack\n    await this.client.sendCommand(`kill ${monster.name}`);\n  }\n});\n\nD. Verify and salvage after manual LLM interventions\n- If an LLM or operator intervenes (detect commands like 'kill orc' or 'autoattack on' coming from non-automation), automation should poll/verify and re-sync its state.\n- Implement a reconciliation process: after any manual command detected, re-query client automation state and room/combat state and re-initialize automation flags accordingly.\n\nExample:\n\n// CommandMonitor.ts\nonExternalCommand(cmd, actor) {\n  if (actor !== 'automation') {\n    logger.info('external command detected; reconciling automation state', { cmd, actor });\n    this.automation.reconcileWithClient();\n    this.combatTracker.recheckCombatState();\n  }\n}\n\nIn AutomationFeatureService.add:\n\nasync reconcileWithClient() {\n  const state = await this.client.getAutomationState();\n  this.autoAttack = state.autoAttack;\n  // re-enable if automation requires it (policy)\n  if (this.autostartAutoAttack && !this.autoAttack) {\n    await this.setAutoAttack(true);\n  }\n}\n\nE. Add monitoring, logs, and alerts for automation mismatch\n- Emit a metric/alert when:\n  - Any aggressive monster is observed but automation.autoAttack === false.\n  - Any time LLM intervention occurs.\n- Make LLM interventions increment a metric \"automation.interventions\" so CI can fail tests.\n\nF. Add tests\n- Unit tests:\n  - RoomTracker emits monsterAggro and monsterTargetedPlayer correctly on simulated state changes.\n  - AutomationFeatureService.setAutoAttack() retries and reads confirmation.\n  - CombatTracker.handleAggro() enables autoAttack or sends kill command as fallback.\n- Integration test:\n  - Simulate an orc attacking (monster.isAggressive = true) while automation.autoAttack === false, assert automation enables autoAttack or kills the orc within 5s with no external intervention.\n\nG. Example end-to-end flow after fixes\n- RoomTracker: detects monster.target === player -> emit 'monsterAggro'\n- CombatTracker: receives event -> acquires lock -> calls automation.setAutoAttack(true)\n- AutomationFeatureService: sends \"autoattack on\", polls client.getAutomationState() until autoAttack true (or retries), sets internal flag\n- CombatTracker: confirms autoAttack true -> ensures active target by sending \"kill <monster>\" (if needed) or waits for autoattack to auto-engage\n- Log success; if any step fails, escalate to metric/alert.\n\n5) Quick low-effort mitigations (short-term)\n- Make automation default autoAttack = true at start of test runs so obvious miss is less likely.\n- Add a watchdog: if a hostile monster is present and automation.autoAttack === false for > N seconds, automatically send \"autoattack on\" + confirmation.\n- Emit an error state/fail-fast in CI when intervention occurs so fix is prioritized.\n\n6) Summary checklist to implement\n- [ ] RoomTracker: emit monsterAggro / monsterTargetedPlayer reliably.\n- [ ] CombatTracker: subscribe to those events and attempt engage (enable autoAttack and/or kill command) with lock.\n- [ ] AutomationFeatureService: robust setAutoAttack with retries + confirmation, reconcileWithClient method.\n- [ ] Add reconciliation on external/manual commands.\n- [ ] Add monitoring and metrics for intervention counts and automation/state mismatches.\n- [ ] Add unit/integration tests for the new behaviors.\n\nIf you want, I can:\n- Produce a draft PR patch with concrete diffs for the repository (assuming JS/TS files/paths), or\n- Produce test cases / test harness code to reproduce the failure deterministically (simulate an orc becoming aggressive)."
+}

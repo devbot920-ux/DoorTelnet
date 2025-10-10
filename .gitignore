@@ -447,3 +447,7 @@ TestResults/
 AppData/
 LocalAppData/
 DoorTelnet/
+# API Keys (keep secure)
+testing/.env
+testing/api_key.txt
+

@@ -488,11 +488,46 @@ public partial class App : Application
                     
                     return w;
                 });
+
+                // Game API Service (for MCP Bridge integration)
+                if (bool.TryParse(config["api:enabled"], out var apiEnabled) && apiEnabled)
+                {
+                    var apiPort = int.TryParse(config["api:port"], out var ap) ? ap : 5000;
+                    services.AddSingleton(sp => new GameApiService(
+                        sp.GetRequiredService<TelnetClient>(),
+                        sp.GetRequiredService<StatsTracker>(),
+                        sp.GetRequiredService<RoomTracker>(),
+                        sp.GetRequiredService<CombatTracker>(),
+                        sp.GetRequiredService<PlayerProfile>(),
+                        sp.GetRequiredService<NavigationFeatureService>(),
+                        sp.GetRequiredService<ILogger<GameApiService>>(),
+                        apiPort
+                    ));
+                }
             })
             .Build();
 
         _host.Start();
         var mainWindow = _host.Services.GetRequiredService<MainWindow>();
+        
+        // Start Game API Service if enabled
+        if (bool.TryParse(_host.Services.GetRequiredService<IConfiguration>()["api:enabled"], out var apiEnabledStart) && apiEnabledStart)
+        {
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    var apiService = _host.Services.GetRequiredService<GameApiService>();
+                    await apiService.StartAsync();
+                }
+                catch (Exception ex)
+                {
+                    var logger = _host.Services.GetRequiredService<ILogger<App>>();
+                    logger.LogError(ex, "Game API Service failed to start");
+                }
+            });
+        }
+        
         mainWindow.Closed += (s, _) =>
         {
             try
