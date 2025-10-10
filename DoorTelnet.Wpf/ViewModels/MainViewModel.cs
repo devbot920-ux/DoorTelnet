@@ -6,6 +6,7 @@ using Microsoft.Extensions.Configuration;
 using DoorTelnet.Core.Telnet;
 using DoorTelnet.Core.Automation;
 using DoorTelnet.Core.Combat;
+using DoorTelnet.Core.World; // NEW: Add for RoomTracker
 using DoorTelnet.Wpf.Services;
 using DoorTelnet.Wpf.Views.Dialogs;
 using Microsoft.Extensions.DependencyInjection;
@@ -24,6 +25,7 @@ public partial class MainViewModel : ViewModelBase
     private readonly IConfiguration _config;
     private readonly StatsTracker _statsTracker;
     private readonly CombatTracker _combatTracker;
+    private readonly RoomTracker _roomTracker; // NEW: Add RoomTracker dependency
     private readonly ISettingsService _settingsService;
     private readonly System.IServiceProvider _serviceProvider;
     private readonly CredentialStore _credentialStore;
@@ -92,6 +94,7 @@ public partial class MainViewModel : ViewModelBase
         RoomViewModel roomViewModel,
         CombatViewModel combatViewModel,
         CombatTracker combatTracker,
+        RoomTracker roomTracker, // NEW: Add RoomTracker parameter
         ISettingsService settingsService,
         System.IServiceProvider serviceProvider,
         CredentialStore credentialStore,
@@ -102,6 +105,7 @@ public partial class MainViewModel : ViewModelBase
         _config = config;
         _statsTracker = statsTracker;
         _combatTracker = combatTracker;
+        _roomTracker = roomTracker; // NEW: Assign RoomTracker
         _settingsService = settingsService;
         _serviceProvider = serviceProvider;
         _credentialStore = credentialStore;
@@ -130,6 +134,7 @@ public partial class MainViewModel : ViewModelBase
         SendPasswordCommand = new RelayCommand(SendPassword, () => IsConnected && GetPreferredPassword() != null);
         QuickLoginCommand = new AsyncRelayCommand(QuickLoginAsync, () => IsConnected && GetPreferredUsername() != null && GetPreferredPassword() != null);
         SelectUserCommand = new RelayCommand<string>(u => { if (!string.IsNullOrWhiteSpace(u)) SelectedUser = u; });
+        ClearCharacterDataCommand = new RelayCommand(ClearAllCharacterData); // NEW: Initialize clear command
 
         SelectedUser = _userSelection.SelectedUser ?? (!string.IsNullOrWhiteSpace(_settingsService.Get().Connection.LastUsername) ? _settingsService.Get().Connection.LastUsername : _credentialStore.ListUsernames().FirstOrDefault());
         RebuildUserMenu();
@@ -173,6 +178,7 @@ public partial class MainViewModel : ViewModelBase
     public ICommand SendPasswordCommand { get; }
     public ICommand QuickLoginCommand { get; }
     public ICommand SelectUserCommand { get; }
+    public ICommand ClearCharacterDataCommand { get; } // NEW: Command to clear all character data
 
     private bool _isConnected;
     public bool IsConnected
@@ -282,6 +288,9 @@ public partial class MainViewModel : ViewModelBase
             await _client.StopAsync();
             IsConnected = false;
             ConnectionStatus = "Disconnected";
+            
+            // NEW: Automatically clear all character data when disconnecting
+            ClearAllCharacterData();
         }
         finally { IsBusy = false; }
     }
@@ -515,6 +524,100 @@ public partial class MainViewModel : ViewModelBase
                 OnPropertyChanged(nameof(CurrentUserButtonText));
                 RebuildUserMenu();
             }
+        }
+    }
+
+    /// <summary>
+    /// Clears all character data including HP, XP, location, monsters, combat info, etc.
+    /// Used when disconnecting or manually resetting character data.
+    /// </summary>
+    private void ClearAllCharacterData()
+    {
+        try
+        {
+            _logger.LogInformation("Clearing all character data...");
+            
+            // 1. Clear PlayerProfile (resets all character info, stats, inventory, spells, etc.)
+            _profile.Reset();
+            
+            // 2. Clear combat tracker (active combats, completed combats, experience tracking)
+            _combatTracker.ClearHistory();
+            
+            // 3. Clear room tracker (current room, monsters, location data)
+            // Use reflection to clear CurrentRoom since there's no public clear method
+            try
+            {
+                var currentRoomField = _roomTracker.GetType().GetProperty("CurrentRoom");
+                currentRoomField?.SetValue(_roomTracker, null);
+                
+                // Also clear internal room and edge data if accessible
+                var roomsField = _roomTracker.GetType().GetField("_rooms", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+                var edgesField = _roomTracker.GetType().GetField("_edges", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+                var adjacentRoomDataField = _roomTracker.GetType().GetField("_adjacentRoomData", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+                var lineBufferField = _roomTracker.GetType().GetField("_lineBuffer", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+                
+                if (roomsField?.GetValue(_roomTracker) is System.Collections.IDictionary rooms) rooms.Clear();
+                if (edgesField?.GetValue(_roomTracker) is System.Collections.IDictionary edges) edges.Clear();
+                if (adjacentRoomDataField?.GetValue(_roomTracker) is System.Collections.IDictionary adjRooms) adjRooms.Clear();
+                
+                // Clear line buffer if available
+                if (lineBufferField?.GetValue(_roomTracker) != null)
+                {
+                    var clearMethod = lineBufferField.FieldType.GetMethod("Clear", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance);
+                    if (clearMethod == null)
+                    {
+                        // Try to clear the internal lines collection
+                        var linesField = lineBufferField.FieldType.GetField("_lines", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+                        if (linesField?.GetValue(lineBufferField.GetValue(_roomTracker)) is System.Collections.IList lines)
+                        {
+                            lines.Clear();
+                        }
+                    }
+                    else
+                    {
+                        clearMethod.Invoke(lineBufferField.GetValue(_roomTracker), null);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to fully clear room tracker data");
+            }
+            
+            // 4. Clear stats tracker data (HP, MP, etc.)
+            // Use reflection to reset stats since there's no public clear method
+            try
+            {
+                var statsProps = _statsTracker.GetType().GetProperties(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance)
+                    .Where(p => p.CanWrite && (p.PropertyType == typeof(int) || p.PropertyType == typeof(long)))
+                    .ToList();
+                
+                foreach (var prop in statsProps)
+                {
+                    if (prop.Name.Contains("Hp") || prop.Name.Contains("Mp") || prop.Name.Contains("Mv") || 
+                        prop.Name.Contains("At") || prop.Name.Contains("Ac"))
+                    {
+                        prop.SetValue(_statsTracker, 0);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to fully clear stats tracker data");
+            }
+            
+            // 5. Clear ViewModels to refresh UI - just trigger property updates
+            Room.Refresh();  // This should clear the room display
+            Combat.ClearHistoryCommand?.Execute(null); // This clears the combat UI
+            
+            // 6. Update all UI bindings
+            RaiseProfileBar(); // Updates all status bar properties
+            
+            _logger.LogInformation("Character data cleared successfully");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error clearing character data");
         }
     }
 }

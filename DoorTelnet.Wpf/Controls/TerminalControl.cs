@@ -87,7 +87,7 @@ public class TerminalControl : Control
     private double _scrollVelocity; // lines per frame (approx)
     private bool _inertiaActive;
 
-    public TerminalControl()
+    public  TerminalControl()
     {
         Focusable = true;
         Loaded += OnLoaded;
@@ -98,7 +98,7 @@ public class TerminalControl : Control
     public override void OnApplyTemplate()
     {
         base.OnApplyTemplate();
-        _vScroll = GetTemplateChild("PART_VScroll") as ScrollBar;
+        _vScroll =  GetTemplateChild("PART_VScroll") as ScrollBar;
         if (_vScroll != null)
         {
             _vScroll.Minimum = 0;

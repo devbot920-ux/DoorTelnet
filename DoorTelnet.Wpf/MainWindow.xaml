@@ -104,6 +104,9 @@
                         <MenuItem Header="Quick Login" Command="{Binding QuickLoginCommand}" />
                         <MenuItem Header="Send Initial Data" Command="{Binding SendInitialDataCommand}" />
                         <Separator />
+                        <MenuItem Header="Clear Character Data" Command="{Binding ClearCharacterDataCommand}" 
+                                  ToolTip="Clears all character data including HP, XP, location, monsters, and combat info"/>
+                        <Separator />
                         <MenuItem Header="Hot Keys" Command="{Binding ShowHotKeysCommand}" />
                     </MenuItem>
                     <MenuItem Header="_Help">
