@@ -272,12 +272,30 @@ class TestRunners:
                 print(f"   {issue}")
             print()
         
+        # UPDATED LOGIC: Test fails if ANY interventions occurred OR if issues found
+        # LLM intervention means the automation failed to handle the situation correctly
+        test_passed = len(monitoring_data["interventions"]) == 0 and len(issues_found) == 0
+        
+        if len(monitoring_data["interventions"]) > 0:
+            print("? TEST FAILED: LLM had to intervene (automation should handle all situations)")
+            print(f"   {len(monitoring_data['interventions'])} intervention(s) required\n")
+        elif len(issues_found) > 0:
+            print("? TEST FAILED: Issues detected during test")
+            print(f"   {len(issues_found)} issue(s) found\n")
+        else:
+            print("? TEST PASSED: No interventions or issues\n")
+        
         result = {
             "test": "extended_autogong",
             "duration": total_time,
             "monitoring_data": monitoring_data,
             "issues": issues_found,
-            "passed": len(issues_found) == 0,
+            "passed": test_passed,
+            "failure_reason": None if test_passed else (
+                f"{len(monitoring_data['interventions'])} LLM intervention(s) required" 
+                if len(monitoring_data["interventions"]) > 0 
+                else f"{len(issues_found)} issue(s) detected"
+            ),
             "stats": {
                 "cycles": monitoring_data["cycles"],
                 "kills": monitoring_data["monsters_killed"],
@@ -289,17 +307,31 @@ class TestRunners:
             }
         }
         
-        # If issues found, get LLM final analysis
-        if issues_found:
-            print("?? Asking LLM for final analysis...")
+        # If test failed (interventions or issues), get LLM final analysis
+        if not test_passed:
+            print("?? Asking LLM for failure analysis...")
+            
+            # Build comprehensive bug description
+            bug_desc_parts = []
+            if len(monitoring_data["interventions"]) > 0:
+                bug_desc_parts.append(f"{len(monitoring_data['interventions'])} LLM intervention(s) required during AutoGong test")
+                for intervention in monitoring_data["interventions"]:
+                    bug_desc_parts.append(f"  - [{intervention['time']}s] {intervention['reason']}: {intervention['action'][:100]}")
+            if len(issues_found) > 0:
+                bug_desc_parts.append(f"{len(issues_found)} issue(s) detected during test")
+            
+            bug_description = "\n".join(bug_desc_parts)
+            
             analysis = self.monitor.analyze_bug(
-                bug_description=f"AutoGong issues found during extended testing",
+                bug_description=bug_description,
                 context={
+                    "test_duration": total_time,
+                    "interventions": monitoring_data["interventions"],
                     "issues": issues_found,
                     "monitoring_data": {
                         "cycles": monitoring_data["cycles"],
                         "kills": monitoring_data["monsters_killed"],
-                        "combat_events": monitoring_data["combat_events"][-5:],
+                        "combat_events": monitoring_data["combat_events"][-10:],
                         "hp_changes": monitoring_data["hp_changes"][-10:],
                         "errors": monitoring_data["errors"],
                         "llm_decisions": monitoring_data["llm_decisions"]

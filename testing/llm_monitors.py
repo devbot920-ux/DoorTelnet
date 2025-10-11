@@ -1,10 +1,12 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """
 LLM monitoring and intervention logic for extended testing
 """
 
 import json
 from typing import Dict, List, Any
+from pathlib import Path
+from datetime import datetime
 
 
 class LLMMonitor:
@@ -21,6 +23,41 @@ class LLMMonitor:
         self.llm = llm_client
         self.mcp = mcp_client
         self.game_context = game_context
+        
+        # Create prompts directory if it doesn't exist
+        self.prompts_dir = Path(__file__).parent / "prompts_output"
+        self.prompts_dir.mkdir(exist_ok=True)
+    
+    def _save_prompt_to_file(self, prompt: str, prompt_type: str, context_info: str = "") -> str:
+        """Save prompt to a JSON file
+        
+        Args:
+            prompt: The prompt text to save
+            prompt_type: Type of prompt (monitor, verification, bug_analysis, etc.)
+            context_info: Additional context for filename
+            
+        Returns:
+            Path to the saved file
+        """
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+        safe_context = "".join(c if c.isalnum() or c in ('-', '_') else '_' for c in context_info) if context_info else ""
+        filename = f"prompt_monitor_{prompt_type}_{safe_context}_{timestamp}.json" if safe_context else f"prompt_monitor_{prompt_type}_{timestamp}.json"
+        filepath = self.prompts_dir / filename
+        
+        prompt_data = {
+            "timestamp": datetime.now().isoformat(),
+            "prompt_type": f"monitor_{prompt_type}",
+            "context_info": context_info,
+            "prompt_text": prompt,
+            "prompt_length": len(prompt),
+            "line_count": prompt.count('\n') + 1
+        }
+        
+        with open(filepath, 'w', encoding='utf-8') as f:
+            json.dump(prompt_data, f, indent=2, ensure_ascii=False)
+        
+        print(f"  💾 Monitor prompt saved to: {filename}")
+        return str(filepath)
     
     def monitor_decision(self, current_state: Dict, recent_output: List[str], 
                         monitoring_data: Dict, elapsed_time: int, 
@@ -35,7 +72,7 @@ class LLMMonitor:
 
 TIME: {elapsed_time}s elapsed of {duration_seconds}s total
 
-CURRENT GAME STATE:
+CURRENT GAME STATE note(AutoAttack is always off when doing AutoGong):
 {json.dumps(current_state, indent=2)}
 
 RECENT GAME OUTPUT (last 20 lines):
@@ -101,6 +138,14 @@ INTERVENTION NEEDED:
   "wait_for_result": 5,
   "assessment": "HP critically low, intervening"
 }}
+INTERVENTION NEEDED:
+{{
+  "action": "intervene",
+  "reasoning": "HP is fine, but we are not attacking a monster that should be",
+  "commands": ["attack orc"],
+  "wait_for_result": 5,
+  "assessment": "Automation failed to attack aggressive monster."
+}}
 
 ABORT NEEDED:
 {{
@@ -111,6 +156,9 @@ ABORT NEEDED:
 
 Analyze the situation and respond with JSON only.
 """
+        
+        # Save prompt before sending
+        self._save_prompt_to_file(prompt, "decision", f"elapsed_{elapsed_time}s")
         
         try:
             llm_response = self.llm.call(prompt)
@@ -185,6 +233,9 @@ INTERVENTION FAILED:
 Respond with JSON only.
 """
         
+        # Save prompt before sending
+        self._save_prompt_to_file(prompt, "followup", f"elapsed_{elapsed_time}s")
+        
         try:
             llm_response = self.llm.call(prompt)
             
@@ -245,6 +296,9 @@ Respond with ONLY valid JSON:
 }}
 """
         
+        # Save prompt before sending
+        self._save_prompt_to_file(verification_prompt, "verification", action)
+        
         try:
             llm_response = self.llm.call(verification_prompt)
             
@@ -282,7 +336,7 @@ Test context and results:
 Analyze this bug and provide:
 1. Root cause analysis - what is the likely cause of the failure?
 2. Based on observations from the game itself, what is the most likely fix?
-3. A detailed GitHub Copilot prompt that would fix this bug
+3. A detailed, but concise GitHub Copilot prompt that would fix this bug
 
 The application has these main components, you can reference them, but dont assume the location of various classes/methods:
 - DoorTelnet.Wpf: WPF UI layer with ViewModels and Services
@@ -304,6 +358,10 @@ Format your response as:
         print("\n" + "="*60)
         print("Analyzing Bug...")
         print("="*60 + "\n")
+        
+        # Save prompt before sending
+        safe_desc = "".join(c if c.isalnum() or c in ('-', '_') else '_' for c in bug_description[:30])
+        self._save_prompt_to_file(prompt, "bug_analysis", safe_desc)
         
         analysis = self.llm.call(prompt)
         

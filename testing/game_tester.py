@@ -7,6 +7,7 @@ import json
 import time
 from typing import Dict, List, Any
 from pathlib import Path
+from datetime import datetime
 
 
 class GameTester:
@@ -30,11 +31,48 @@ class GameTester:
         # Load game context from RoseGamePlay.md
         self.game_context = self._load_game_context()
         
+        # Create prompts directory if it doesn't exist
+        self.prompts_dir = Path(__file__).parent / "prompts_output"
+        self.prompts_dir.mkdir(exist_ok=True)
+        
         # Show game context status
         if self.game_context:
             print(f"? Game context loaded from RoseGamePlay.md")
         else:
             print(f"??  Game context not found (optional)")
+        
+        print(f"? Prompt capture enabled - outputs will be saved to: {self.prompts_dir}")
+    
+    def _save_prompt_to_file(self, prompt: str, test_name: str, prompt_type: str = "main") -> str:
+        """Save prompt to a JSON file
+        
+        Args:
+            prompt: The prompt text to save
+            test_name: Name of the test (for filename)
+            prompt_type: Type of prompt (main, verification, analysis, etc.)
+            
+        Returns:
+            Path to the saved file
+        """
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+        safe_test_name = "".join(c if c.isalnum() or c in ('-', '_') else '_' for c in test_name)
+        filename = f"prompt_{safe_test_name}_{prompt_type}_{timestamp}.json"
+        filepath = self.prompts_dir / filename
+        
+        prompt_data = {
+            "timestamp": datetime.now().isoformat(),
+            "test_name": test_name,
+            "prompt_type": prompt_type,
+            "prompt_text": prompt,
+            "prompt_length": len(prompt),
+            "line_count": prompt.count('\n') + 1
+        }
+        
+        with open(filepath, 'w', encoding='utf-8') as f:
+            json.dump(prompt_data, f, indent=2, ensure_ascii=False)
+        
+        print(f"  ?? Prompt saved to: {filename}")
+        return str(filepath)
     
     def _load_game_context(self) -> str:
         """Load game context from RoseGamePlay.md"""
@@ -206,6 +244,11 @@ Keep test steps simple and verifiable. Each step should have a clear expected ou
 Return ONLY the JSON, nothing else.
 """
         
+        # Save the prompt to file
+        print("\n?? Capturing prompt before sending to LLM...")
+        prompt_file = self._save_prompt_to_file(prompt, feature_name, "test_plan_generation")
+        print(f"  ? Prompt captured: {len(prompt)} characters, {prompt.count(chr(10)) + 1} lines\n")
+        
         print("Asking LLM to generate test plan...")
         llm_response = self.llm.call(prompt)
         
@@ -229,7 +272,8 @@ Return ONLY the JSON, nothing else.
             return {
                 "feature": feature_name,
                 "error": "Failed to parse test plan",
-                "llm_response": llm_response
+                "llm_response": llm_response,
+                "prompt_file": prompt_file
             }
         
         # Execute test plan
@@ -289,7 +333,8 @@ Return ONLY the JSON, nothing else.
             "feature": feature_name,
             "test_plan": test_plan,
             "results": results,
-            "overall_pass": overall_pass
+            "overall_pass": overall_pass,
+            "prompt_file": prompt_file
         }
     
     def test_with_custom_prompt(self, feature_name: str, custom_prompt: str) -> Dict[str, Any]:
@@ -416,6 +461,11 @@ IMPORTANT:
 Return ONLY valid JSON, no explanations.
 """
         
+        # Save the prompt to file
+        print("\n?? Capturing custom prompt before sending to LLM...")
+        prompt_file = self._save_prompt_to_file(full_prompt, feature_name, "custom_test_generation")
+        print(f"  ? Prompt captured: {len(full_prompt)} characters, {full_prompt.count(chr(10)) + 1} lines\n")
+        
         print("?? Asking LLM to generate test plan from your prompt...")
         llm_response = self.llm.call(full_prompt)
         
@@ -438,7 +488,8 @@ Return ONLY valid JSON, no explanations.
             return {
                 "feature": feature_name,
                 "error": "Failed to parse test plan",
-                "llm_response": llm_response
+                "llm_response": llm_response,
+                "prompt_file": prompt_file
             }
         
         # Execute test plan
@@ -486,7 +537,8 @@ Return ONLY valid JSON, no explanations.
             "test_plan": test_plan,
             "results": results,
             "overall_pass": overall_pass,
-            "custom_prompt": custom_prompt
+            "custom_prompt": custom_prompt,
+            "prompt_file": prompt_file
         }
     
     def _check_expectation(self, result: Dict, expected: str) -> bool:

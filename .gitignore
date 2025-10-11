@@ -450,4 +450,8 @@ DoorTelnet/
 # API Keys (keep secure)
 testing/.env
 testing/api_key.txt
-
+testing/**/*.json
+testing/*.json
+testing/**/*.md
+testing/bug*.md
+testing/feature*.md
