@@ -42,7 +42,11 @@ public class WpfLogProvider : ILoggerProvider
     {
         private readonly LogBuffer _buffer; private readonly string _cat;
         public WpfLogger(LogBuffer buf, string cat) { _buffer = buf; _cat = cat; }
-        public IDisposable BeginScope<TState>(TState state) => NullScope.Instance;
+        public IDisposable BeginScope<TState>(TState state)
+        {
+            return NullScope.Instance;
+        }
+
         public bool IsEnabled(LogLevel logLevel) => true;
         public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
         {

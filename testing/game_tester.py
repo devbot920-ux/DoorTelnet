@@ -120,9 +120,6 @@ Test instructions:
 CRITICAL: Understanding AutoGong vs AutoAttack:
 ????????????????????????????????????????????
 **AutoGong Behavior (if testing AutoGong)**:
-- AutoGong does NOT enable the "AutoAttack" feature
-- AutoGong implements its OWN combat logic internally
-- Uses the same attack methods as AutoAttack, but operates independently
 - **CONTINUOUS COMBAT MODE**: NO idle time when AT/AC = 0
   - Rings gong ("r g") immediately when timers reset (~1.5s interval)
   - Attacks all aggressive monsters continuously
@@ -143,7 +140,8 @@ CRITICAL: Understanding AutoGong vs AutoAttack:
 - ? NO extended idle periods (AT/AC = 0 for > 2 seconds)
 - ? Immediate attack when monster spawns
 - ? Continuous combat maintained
-- ? automation.autoGong = true (NOT automation.autoAttack = true)
+- ? automation.autoGong = true 
+- ? automation.autoAttack = true when autogong is enabled
 - ? System stops when HP < GongMinHpPercent
 ????????????????????????????????????????????
 
@@ -220,7 +218,7 @@ IMPORTANT: Respond with ONLY valid JSON in this exact format (no explanations, n
     {{{{
       "action": "observe_game_state",
       "params": {{}},
-      "expected": "automation.autoGong: true (NOT autoAttack)"
+      "expected": "automation.autoGong: true"
     }}}},
     {{{{
       "action": "get_recent_output",
@@ -370,8 +368,6 @@ Recent game output (last 20 lines):
 CRITICAL: Understanding AutoGong vs AutoAttack:
 ????????????????????????????????????????????
 **AutoGong Behavior**:
-- AutoGong does NOT enable the "AutoAttack" feature flag
-- AutoGong implements its OWN combat logic (shared methods with AutoAttack)
 - **CONTINUOUS COMBAT MODE**: Maintains constant activity
   - Rings gong ("r g") every ~1.5 seconds when AT/AC = 0
   - NO idle periods - immediately rings gong when timers ready
@@ -456,7 +452,6 @@ IMPORTANT:
 - Prioritize player safety over test objectives
 - Use verify_output: true when you want to analyze actual game output
 - **For AutoGong tests**: Add steps to verify continuous combat (no idle time)
-- **Clarify**: AutoGong does NOT enable AutoAttack feature
 
 Return ONLY valid JSON, no explanations.
 """

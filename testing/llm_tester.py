@@ -35,7 +35,7 @@ Examples:
   # Test AutoGong feature
   python llm_tester.py autogong
   
-  # Extended AutoGong test (2 minutes)
+  # Extended AutoGong test (4 minutes)
   python llm_tester.py autogong-extended
   
   # Extended AutoGong test with custom duration (5 minutes)
@@ -76,8 +76,8 @@ Examples:
     parser.add_argument(
         "--duration",
         type=int,
-        default=120,
-        help="Duration in seconds for extended test (default: 120)"
+        default=240,
+        help="Duration in seconds for extended test (default: 240)"
     )
     
     parser.add_argument(
@@ -116,16 +116,23 @@ Examples:
     print(f"DoorTelnet LLM Test Runner")
     print(f"{'='*60}\n")
     
-    # Create clients
-    llm_client = LLMClient(llm_url=args.llm_url, api_key=args.api_key)
+    # Create LLM clients
+    # gpt-5-mini for monitoring (fast, frequent checks)
+    llm_monitor_client = LLMClient(llm_url=args.llm_url, api_key=args.api_key, model_override="gpt-5-mini")
+    
+    # GPT-5 for summaries and test generation (more capable, less frequent)
+    llm_summary_client = LLMClient(llm_url=args.llm_url, api_key=args.api_key, model_override="gpt-5-codex")
+    
     mcp_client = MCPClient(mcp_url=args.mcp_url)
     
-    # Create monitor and runners
-    llm_monitor = LLMMonitor(llm_client, mcp_client)
-    test_runners = TestRunners(mcp_client, llm_monitor)
+    # Create monitor (uses fast model for frequent checks)
+    llm_monitor = LLMMonitor(llm_monitor_client, mcp_client)
     
-    # Create main tester
-    tester = GameTester(mcp_client, llm_client, llm_monitor, test_runners)
+    # Create test runners with summary client for final analysis
+    test_runners = TestRunners(mcp_client, llm_monitor, llm_summary_client)
+    
+    # Create main tester (uses GPT-5 for test generation)
+    tester = GameTester(mcp_client, llm_summary_client, llm_monitor, test_runners)
     
     # Run the selected test
     result = None
@@ -140,7 +147,6 @@ Examples:
                 Test the AutoGong automation feature (CONTINUOUS COMBAT MODE):
                 
                 CRITICAL UNDERSTANDING:
-                - AutoGong does NOT enable the AutoAttack feature
                 - AutoGong implements its own combat logic using shared attack methods
                 - Maintains CONTINUOUS COMBAT - no idle time when AT/AC = 0
                 
@@ -156,16 +162,18 @@ Examples:
                 2. Check current automation state (should show autoGong: false initially)
                 3. Enable AutoGong using set_automation
                 4. Verify AutoGong is enabled (automation.autoGong should be true)
-                5. Verify AutoAttack is NOT enabled (automation.autoAttack should remain as-is)
+                5. Verify AutoAttack is enabled (automation.autoAttack should be true)
                 6. Observe game output for gong activity ("r g" command)
                 7. Observe immediate monster attacks after gong
                 8. Verify NO extended idle periods (AT/AC = 0 for > 2 seconds)
                 9. Monitor several gong cycles for consistency
                 10. Disable AutoGong
                 11. Verify AutoGong is disabled
+                12. Verify AutoAttack is disabled
                 
                 Key Verification Points:
-                - ✓ automation.autoGong changes to true (NOT autoAttack)
+                - ✓ automation.autoGong changes to true
+                - ✓ automation.autoattack changes to true
                 - ✓ Gong rings every ~1.5 seconds when timers ready
                 - ✓ Continuous combat maintained (no idle time)
                 - ✓ Immediate attack response to summoned monsters
@@ -204,11 +212,14 @@ Examples:
         print(f"Results saved to: {output_filename}")
         print(f"{'='*60}\n")
         
-        # If test failed, generate bug analysis
+        # If test failed, generate bug analysis using GPT-5
         if not result.get("passed", result.get("overall_pass", False)):
-            print("Test failed. Generating bug analysis...\n")
+            print("Test failed. Generating bug analysis with GPT-5...\n")
             
-            analysis = llm_monitor.analyze_bug(
+            # Create a dedicated bug analysis monitor with GPT-5
+            bug_analysis_monitor = LLMMonitor(llm_summary_client, mcp_client)
+            
+            analysis = bug_analysis_monitor.analyze_bug(
                 bug_description=f"Test '{args.test}' failed",
                 context=result
             )

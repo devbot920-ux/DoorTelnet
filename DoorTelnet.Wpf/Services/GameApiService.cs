@@ -188,7 +188,15 @@ public class GameApiService : IDisposable
 
         var success = feature?.ToLowerInvariant() switch
         {
-            "autogong" => SetFeature(() => _profile.Features.AutoGong = enabled),
+            "autogong" => SetFeature(() =>
+            {
+                _profile.Features.AutoGong = enabled;
+                // Auto-Gong implies Auto-Attack enabled
+                if (enabled && !_profile.Features.AutoAttack)
+                {
+                    _profile.Features.AutoAttack = true;
+                }
+            }),
             "autoattack" => SetFeature(() => _profile.Features.AutoAttack = enabled),
             "autoshield" => SetFeature(() => _profile.Features.AutoShield = enabled),
             "autoheal" => SetFeature(() => _profile.Features.AutoHeal = enabled),
@@ -205,6 +213,13 @@ public class GameApiService : IDisposable
         try
         {
             action();
+            // Notify listeners/UI that profile changed
+            try
+            {
+                var method = _profile.GetType().GetMethod("RaiseUpdated", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+                method?.Invoke(_profile, null);
+            }
+            catch { }
             return true;
         }
         catch

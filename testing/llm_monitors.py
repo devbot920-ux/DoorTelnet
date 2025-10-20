@@ -72,7 +72,7 @@ class LLMMonitor:
 
 TIME: {elapsed_time}s elapsed of {duration_seconds}s total
 
-CURRENT GAME STATE note(AutoAttack is always off when doing AutoGong):
+CURRENT GAME STATE:
 {json.dumps(current_state, indent=2)}
 
 RECENT GAME OUTPUT (last 20 lines):

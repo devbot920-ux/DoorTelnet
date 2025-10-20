@@ -51,8 +51,8 @@ public partial class MainViewModel : ViewModelBase
     public ObservableCollection<MenuUserItem> UserMenuItems { get; } = new();
 
     // Tooltip properties for automation features
-    public string AutoGongTooltip => "Auto Gong: Automatically rings the gong to summon monsters, attacks them, and loots gold/silver. Requires sufficient HP to operate safely.";
-    public string AutoAttackTooltip => "Auto Attack: Automatically attacks aggressive monsters in the current room. Works independently of Auto Gong.";
+    public string AutoGongTooltip => "Auto Gong: Automatically rings the gong when no AC/AT timers and no aggressive monsters are present. Enables Auto Attack to handle summoned monsters. Requires sufficient HP to operate safely.";
+    public string AutoAttackTooltip => "Auto Attack: Automatically attacks aggressive monsters in the current room. This is automatically enabled when Auto Gong is active, but can also be used independently.";
 
     public class MenuUserItem : INotifyPropertyChanged
     {
@@ -83,6 +83,11 @@ public partial class MainViewModel : ViewModelBase
         OnPropertyChanged(nameof(XpLeft));
         OnPropertyChanged(nameof(ArmedWith));
         OnPropertyChanged(nameof(FirstName));
+        // Also propagate feature-related UI
+        OnPropertyChanged(nameof(AutoGong));
+        OnPropertyChanged(nameof(AutoAttack));
+        OnPropertyChanged(nameof(AutoGongButtonText));
+        OnPropertyChanged(nameof(AutoAttackButtonText));
     }
 
     public MainViewModel(
@@ -144,6 +149,10 @@ public partial class MainViewModel : ViewModelBase
         // Subscribe to stats changes to update auto-gong button status
         _statsTracker.Updated += () => App.Current.Dispatcher.Invoke(() => {
             OnPropertyChanged(nameof(AutoGongButtonText));
+            OnPropertyChanged(nameof(AutoAttackButtonText));
+            // Ensure the toggles reflect any external changes (MCP)
+            OnPropertyChanged(nameof(AutoGong));
+            OnPropertyChanged(nameof(AutoAttack));
         });
 
         _client.ConnectionFailed += msg =>
@@ -459,8 +468,15 @@ public partial class MainViewModel : ViewModelBase
             if (_profile.Features.AutoGong != value)
             {
                 _profile.Features.AutoGong = value;
+                // Auto-enable AutoAttack when AutoGong is turned on from UI
+                if (value && !_profile.Features.AutoAttack)
+                {
+                    _profile.Features.AutoAttack = true;
+                }
                 OnPropertyChanged();
                 OnPropertyChanged(nameof(AutoGongButtonText));
+                OnPropertyChanged(nameof(AutoAttack));
+                OnPropertyChanged(nameof(AutoAttackButtonText));
             }
         }
     }

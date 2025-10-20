@@ -32,9 +32,9 @@
                             <CheckBox Content="Auto Heal" IsChecked="{Binding AutoHeal}" Margin="4"
                                       ToolTip="Automatically casts healing spells when HP drops below configured threshold"/>
                             <CheckBox Content="Auto Gong" IsChecked="{Binding AutoGong}" Margin="4"
-                                      ToolTip="Automatically rings the gong to summon monsters, attacks them, and loots gold/silver. Requires sufficient HP to operate safely"/>
+                                      ToolTip="Rings gong when no AC/AT timers and no aggressive monsters present. Automatically enables Auto Attack to handle summoned monsters."/>
                             <CheckBox Content="Auto Attack" IsChecked="{Binding AutoAttack}" Margin="4"
-                                      ToolTip="Automatically attacks aggressive monsters in the current room. Works independently of Auto Gong"/>
+                                      ToolTip="Automatically attacks aggressive monsters. Automatically enabled when Auto Gong is active, but can also be used independently."/>
                             <CheckBox Content="Pickup Gold" IsChecked="{Binding PickupGold}" Margin="4"
                                       ToolTip="Automatically picks up gold coins when they appear"/>
                             <CheckBox Content="Pickup Silver" IsChecked="{Binding PickupSilver}" Margin="4"
@@ -48,7 +48,7 @@
                             </StackPanel>
                             <StackPanel Margin="4">
                                 <TextBlock Text="Gong HP %" FontSize="11"
-                                          ToolTip="Minimum HP percentage required to continue gong automation cycle"/>
+                                          ToolTip="Minimum HP percentage required to run Auto Gong/Auto Attack"/>
                                 <TextBox Text="{Binding GongMinHpPercent, UpdateSourceTrigger=PropertyChanged}" Width="90" Style="{StaticResource SelectAllOnFocusTextBox}" PreviewTextInput="NumericOnly" />
                             </StackPanel>
                             <StackPanel Margin="4">
@@ -60,7 +60,7 @@
                         <UniformGrid Columns="3" Margin="4,4,4,0">
                             <StackPanel Margin="4">
                                 <TextBlock Text="Warning Heal HP %" FontSize="11"
-                                          ToolTip="HP percentage that stops gong and waits for timers before healing"/>
+                                          ToolTip="HP percentage that stops automation and waits for timers before healing"/>
                                 <TextBox Text="{Binding WarningHealHpPercent, UpdateSourceTrigger=PropertyChanged}" Width="90" Style="{StaticResource SelectAllOnFocusTextBox}" PreviewTextInput="NumericOnly" />
                             </StackPanel>
                             <StackPanel Margin="4">

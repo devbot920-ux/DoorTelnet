@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """
 Specific test runner implementations
 """
@@ -11,15 +11,17 @@ from typing import Dict, Any
 class TestRunners:
     """Collection of specific test implementations"""
     
-    def __init__(self, mcp_client, llm_monitor):
+    def __init__(self, mcp_client, llm_monitor, summary_llm_client=None):
         """Initialize test runners
         
         Args:
             mcp_client: MCP client instance
-            llm_monitor: LLM monitor instance
+            llm_monitor: LLM monitor instance (uses fast model like gpt-5-mini)
+            summary_llm_client: Optional separate LLM client for summaries (e.g., GPT-5)
         """
         self.mcp = mcp_client
         self.monitor = llm_monitor
+        self.summary_llm_client = summary_llm_client
     
     def run_extended_autogong(self, duration_seconds: int = 120, 
                              llm_check_interval: int = 10) -> Dict[str, Any]:
@@ -115,7 +117,7 @@ class TestRunners:
                         "hpPercent": char.get("hpPercent", 0)
                     }
                     monitoring_data["combat_events"].append(event)
-                    print(f"  [{elapsed}s] ??  Combat: {event['target']} (HP: {event['hpPercent']}%)")
+                    print(f"  [{elapsed}s] ⚔️  Combat: {event['target']} (HP: {event['hpPercent']}%)")
                 
                 # Check recent output for errors
                 recent_output = self.mcp.get_recent_output(20)
@@ -309,7 +311,7 @@ class TestRunners:
         
         # If test failed (interventions or issues), get LLM final analysis
         if not test_passed:
-            print("?? Asking LLM for failure analysis...")
+            print("🤖 Asking LLM for failure analysis...")
             
             # Build comprehensive bug description
             bug_desc_parts = []
@@ -322,22 +324,45 @@ class TestRunners:
             
             bug_description = "\n".join(bug_desc_parts)
             
-            analysis = self.monitor.analyze_bug(
-                bug_description=bug_description,
-                context={
-                    "test_duration": total_time,
-                    "interventions": monitoring_data["interventions"],
-                    "issues": issues_found,
-                    "monitoring_data": {
-                        "cycles": monitoring_data["cycles"],
-                        "kills": monitoring_data["monsters_killed"],
-                        "combat_events": monitoring_data["combat_events"][-10:],
-                        "hp_changes": monitoring_data["hp_changes"][-10:],
-                        "errors": monitoring_data["errors"],
-                        "llm_decisions": monitoring_data["llm_decisions"]
+            # Use GPT-5 for comprehensive bug analysis if available, otherwise use monitor's client
+            if self.summary_llm_client:
+                print("  Using GPT-5 for detailed analysis...")
+                from llm_monitors import LLMMonitor
+                summary_monitor = LLMMonitor(self.summary_llm_client, self.mcp)
+                analysis = summary_monitor.analyze_bug(
+                    bug_description=bug_description,
+                    context={
+                        "test_duration": total_time,
+                        "interventions": monitoring_data["interventions"],
+                        "issues": issues_found,
+                        "monitoring_data": {
+                            "cycles": monitoring_data["cycles"],
+                            "kills": monitoring_data["monsters_killed"],
+                            "combat_events": monitoring_data["combat_events"][-10:],
+                            "hp_changes": monitoring_data["hp_changes"][-10:],
+                            "errors": monitoring_data["errors"],
+                            "llm_decisions": monitoring_data["llm_decisions"]
+                        }
                     }
-                }
-            )
+                )
+            else:
+                # Fallback to monitor's client (gpt-5-mini)
+                analysis = self.monitor.analyze_bug(
+                    bug_description=bug_description,
+                    context={
+                        "test_duration": total_time,
+                        "interventions": monitoring_data["interventions"],
+                        "issues": issues_found,
+                        "monitoring_data": {
+                            "cycles": monitoring_data["cycles"],
+                            "kills": monitoring_data["monsters_killed"],
+                            "combat_events": monitoring_data["combat_events"][-10:],
+                            "hp_changes": monitoring_data["hp_changes"][-10:],
+                            "errors": monitoring_data["errors"],
+                            "llm_decisions": monitoring_data["llm_decisions"]
+                        }
+                    }
+                )
             result["llm_analysis"] = analysis
             print(f"\n{analysis}\n")
         

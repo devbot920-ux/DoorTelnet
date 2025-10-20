@@ -56,7 +56,7 @@ public partial class RoomView : UserControl
         }
     }
 
-    private void ComboBox_DropDownOpened(object sender, EventArgs e)
+    private void ComboBox_DropDownOpened(object? sender, EventArgs e)
     {
         if (sender is ComboBox comboBox && comboBox.IsEditable)
         {

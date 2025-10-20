@@ -1,21 +1,22 @@
-using System;
 using System.Text.RegularExpressions;
-using System.Threading;
-using System.Threading.Tasks; // Added for Task
 using DoorTelnet.Core.Automation;
 using DoorTelnet.Core.Player;
 using DoorTelnet.Core.Telnet;
 using DoorTelnet.Core.World; // added for RoomTracker
 using DoorTelnet.Core.Combat; // added for CombatTracker
 using Microsoft.Extensions.Logging;
-using System.Linq;
-using DoorTelnet.Core.Player; // for SpellInfo
 
 namespace DoorTelnet.Wpf.Services;
 
 /// <summary>
 /// Lightweight automation layer for character feature flags (auto shield / gong / heal / pickup gold & silver / attack)
 /// Evaluates periodically instead of only on stats update so that features keep working even when stats lines pause.
+/// 
+/// AUTO-GONG BEHAVIOR:
+/// - Auto-gong enables auto-attack automatically
+/// - Gong only rings when: no AC/AT timers AND no aggressive monsters in room
+/// - Auto-attack handles all monsters (including summoned ones)
+/// - Both features understand that AC=0 AND AT=0 = not in combat
 /// </summary>
 public class AutomationFeatureService : IDisposable
 {
@@ -68,6 +69,16 @@ public class AutomationFeatureService : IDisposable
         _logger.LogInformation("AutomationFeatureService initialized with 500ms evaluation interval");
     }
 
+    private void RaiseProfileUpdated()
+    {
+        try
+        {
+            var method = _profile.GetType().GetMethod("RaiseUpdated", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+            method?.Invoke(_profile, null);
+        }
+        catch { }
+    }
+
     private int _hpPct; // cached
     private void OnStatsUpdated()
     {
@@ -84,6 +95,15 @@ public class AutomationFeatureService : IDisposable
             if (string.IsNullOrWhiteSpace(line)) return;
             var feats = _profile.Features;
             
+            // AUTO-ENABLE AutoAttack when AutoGong is enabled
+            // This ensures monsters are attacked after summoning
+            if (feats.AutoGong && !feats.AutoAttack)
+            {
+                _profile.Features.AutoAttack = true;
+                RaiseProfileUpdated();
+                _logger.LogInformation("AutoAttack automatically enabled by AutoGong");
+            }
+            
             // NEW: Detect when player can't afford gong and auto-disable AutoGong
             if (line.Contains("You can't afford to ring the gong", StringComparison.OrdinalIgnoreCase))
             {
@@ -93,6 +113,7 @@ public class AutomationFeatureService : IDisposable
                     _inGongCycle = false;
                     _waitingForTimers = false;
                     _waitingForHealTimers = false;
+                    RaiseProfileUpdated();
                     _logger.LogWarning("AutoGong automatically disabled - insufficient funds to ring gong");
                 }
             }
@@ -112,7 +133,7 @@ public class AutomationFeatureService : IDisposable
                     // Mark it as aggressive in the room immediately
                     _room.UpdateMonsterDisposition(monsterName, "aggressive");
                     
-                    // If AutoGong is enabled, immediately reset timer wait and enter combat mode
+                    // If AutoGong is enabled, auto-attack will handle the monster
                     if (feats.AutoGong && _stats.MaxHp > 0)
                     {
                         var hpPercent = _hpPct;
@@ -122,16 +143,8 @@ public class AutomationFeatureService : IDisposable
                         {
                             _waitingForTimers = false;
                             _inGongCycle = true;
-                            _logger.LogInformation("AutoGong entering combat mode immediately due to summoned monster '{monster}'", monsterName);
-                            
-                            // Trigger immediate attack evaluation
-                            AttackAggressiveMonsters("AutoGong-Summoned");
+                            _logger.LogInformation("AutoGong entering combat mode - AutoAttack will handle summoned monster '{monster}'", monsterName);
                         }
-                    }
-                    else if (feats.AutoAttack && !feats.AutoGong)
-                    {
-                        // Independent AutoAttack mode
-                        AttackAggressiveMonsters("AutoAttack-Summoned");
                     }
                 }
             }
@@ -177,12 +190,16 @@ public class AutomationFeatureService : IDisposable
 
     /// <summary>
     /// Unified method to attack aggressive monsters, used by both AutoGong and AutoAttack
+    /// COMBAT DETECTION: AC=0 AND AT=0 means not in combat
     /// </summary>
     private void AttackAggressiveMonsters(string context)
     {
         var room = _room.CurrentRoom;
         if (room == null) return;
 
+        // COMBAT DETECTION: Check if we're actually in combat based on timers
+        bool inCombat = _stats.Ac > 0 || _stats.At > 0;
+        
         var aggressiveMobs = room.Monsters
             .Where(m => m.Disposition.Equals("aggressive", StringComparison.OrdinalIgnoreCase))
             .ToList();
@@ -191,7 +208,7 @@ public class AutomationFeatureService : IDisposable
         {
             // Reduced reset timeout for more responsive attacking of new spawns
             var now = DateTime.UtcNow;
-            if ((now - _lastAttackReset).TotalSeconds >= 15) // Reduced from 30 to 15 seconds
+            if ((now - _lastAttackReset).TotalSeconds >= 15)
             {
                 _attackedMonsters.Clear();
                 _lastAttackReset = now;
@@ -234,7 +251,9 @@ public class AutomationFeatureService : IDisposable
                     _client.SendCommand($"a {letterLower}");
                     _attackedMonsters.Add(next.Name);
                     var targetStatus = targetedMonster != null && string.Equals(next.Name?.Replace(" (summoned)", ""), targetedMonster.MonsterName, StringComparison.OrdinalIgnoreCase) ? " [TARGETED]" : "";
-                    _logger.LogInformation("{context} attacking mob '{mob}' (letter '{letter}'){targetStatus} (remaining targets: {count})", context, next.Name, letterLower, targetStatus, aggressiveMobs.Count(m => !_attackedMonsters.Contains(m.Name)));
+                    var combatStatus = inCombat ? " [IN COMBAT]" : " [NOT IN COMBAT]";
+                    _logger.LogInformation("{context} attacking mob '{mob}' (letter '{letter}'){targetStatus}{combatStatus} (remaining targets: {count})", 
+                        context, next.Name, letterLower, targetStatus, combatStatus, aggressiveMobs.Count(m => !_attackedMonsters.Contains(m.Name)));
                 }
                 else
                 {
@@ -242,7 +261,9 @@ public class AutomationFeatureService : IDisposable
                     _client.SendCommand($"a {next.Name.Split(' ').FirstOrDefault()}");
                     _attackedMonsters.Add(next.Name);
                     var targetStatus = targetedMonster != null && string.Equals(next.Name?.Replace(" (summoned)", ""), targetedMonster.MonsterName, StringComparison.OrdinalIgnoreCase) ? " [TARGETED]" : "";
-                    _logger.LogInformation("{context} attacking mob '{mob}'{targetStatus} via name fallback (remaining targets: {count})", context, next.Name, targetStatus, aggressiveMobs.Count(m => !_attackedMonsters.Contains(m.Name)));
+                    var combatStatus = inCombat ? " [IN COMBAT]" : " [NOT IN COMBAT]";
+                    _logger.LogInformation("{context} attacking mob '{mob}'{targetStatus}{combatStatus} via name fallback (remaining targets: {count})", 
+                        context, next.Name, targetStatus, combatStatus, aggressiveMobs.Count(m => !_attackedMonsters.Contains(m.Name)));
                 }
             }
             else
@@ -252,8 +273,8 @@ public class AutomationFeatureService : IDisposable
         }
         else
         {
-            // No aggressive monsters - clear attack tracking for next wave (but only in AutoAttack context)
-            if (context == "AutoAttack" && _attackedMonsters.Count > 0)
+            // No aggressive monsters - clear attack tracking for next wave
+            if (_attackedMonsters.Count > 0)
             {
                 _attackedMonsters.Clear();
                 _logger.LogTrace("{context} cleared attacked monsters - no aggressive mobs remain", context);
@@ -268,6 +289,14 @@ public class AutomationFeatureService : IDisposable
             var feats = _profile.Features;
             var th = _profile.Thresholds;
             var now = DateTime.UtcNow;
+
+            // AUTO-ENABLE AutoAttack when AutoGong is enabled
+            if (feats.AutoGong && !feats.AutoAttack)
+            {
+                _profile.Features.AutoAttack = true;
+                RaiseProfileUpdated();
+                _logger.LogInformation("AutoAttack automatically enabled by AutoGong (in evaluation loop)");
+            }
 
             // Check critical health first
             if (_stats.MaxHp > 0 && _hpPct <= th.CriticalHpPercent && th.CriticalHpPercent > 0)
@@ -404,7 +433,7 @@ public class AutomationFeatureService : IDisposable
                 }
             }
 
-            // ---------- Auto Gong (full cycle with integrated attack logic) ----------
+            // ---------- Auto Gong (rings gong only when no timers and no aggressive monsters) ----------
             if (feats.AutoGong)
             {
                 // On enable edge, reset state so we can begin fresh
@@ -413,14 +442,14 @@ public class AutomationFeatureService : IDisposable
                     _inGongCycle = false;
                     _waitingForTimers = false;
                     _waitingForHealTimers = false;
-                    _attackedMonsters.Clear(); // Clear the unified attack tracking
+                    _attackedMonsters.Clear();
                     _logger.LogDebug("AutoGong enabled - resetting all state");
                 }
 
                 // Need valid stats & HP threshold
                 if (_stats.MaxHp > 0)
                 {
-                    var hpPercent = _hpPct; // already cached
+                    var hpPercent = _hpPct;
                     
                     if (hpPercent < th.GongMinHpPercent)
                     {
@@ -431,19 +460,20 @@ public class AutomationFeatureService : IDisposable
                             _logger.LogDebug("AutoGong paused - HP {hp}% below threshold {thresh}%", hpPercent, th.GongMinHpPercent);
                         }
                     }
-                    else if (!_waitingForHealTimers) // Don't start new cycles while waiting for heal timers
+                    else if (!_waitingForHealTimers)
                     {
-                        bool timersReady = _stats.At == 0 && _stats.Ac == 0; // conservative readiness (used for starting a new cycle)
-                        var room = _room.CurrentRoom; // may be null if room not parsed yet
+                        // COMBAT DETECTION: timersReady = true when AC=0 AND AT=0 (not in combat)
+                        bool timersReady = _stats.At == 0 && _stats.Ac == 0;
+                        var room = _room.CurrentRoom;
+                        
                         if (room != null)
                         {
-                            const int minGongIntervalMs = 1500; // Reduced from 2000 to 1500ms for more responsive gong
+                            const int minGongIntervalMs = 1500;
                             var aggressivePresent = room.Monsters.Any(m => m.Disposition.Equals("aggressive", StringComparison.OrdinalIgnoreCase));
 
-                            // If we're waiting for timers but aggressive monsters are present, reset immediately and attack
+                            // If we're waiting for timers but aggressive monsters are present, enter combat mode
                             if (_waitingForTimers && aggressivePresent)
                             {
-                                // SAFETY CHECK: Don't enter combat if we're at warning heal level
                                 var currentHpPercent = _hpPct;
                                 if (currentHpPercent <= th.WarningHealHpPercent && th.WarningHealHpPercent > 0)
                                 {
@@ -457,8 +487,8 @@ public class AutomationFeatureService : IDisposable
                                 else
                                 {
                                     _waitingForTimers = false;
-                                    _inGongCycle = true; // Re-enter combat mode to attack the monsters
-                                    _logger.LogInformation("AutoGong entering combat mode due to aggressive monsters - stopping timer wait");
+                                    _inGongCycle = true;
+                                    _logger.LogInformation("AutoGong entering combat mode - AutoAttack will handle aggressive monsters");
                                 }
                             }
                             // Normal timer reset when no aggressive monsters
@@ -468,70 +498,64 @@ public class AutomationFeatureService : IDisposable
                                 {
                                     _waitingForTimers = false;
                                     _inGongCycle = false;
-                                    _logger.LogTrace("AutoGong timers reset - ready for next cycle");
+                                    _logger.LogTrace("AutoGong timers reset - ready for next cycle (AC={ac} AT={at})", _stats.Ac, _stats.At);
                                 }
                             }
-                            else if (!aggressivePresent && !_inGongCycle)
+                            // MODIFIED: Ring gong only when no aggressive monsters AND timers ready
+                            else if (!aggressivePresent && !_inGongCycle && timersReady)
                             {
-                                // Start new cycle only if no aggressive monsters present
-                                if (timersReady && (now - _lastGongAction).TotalMilliseconds >= minGongIntervalMs)
+                                if ((now - _lastGongAction).TotalMilliseconds >= minGongIntervalMs)
                                 {
-                                    // CRITICAL FIX: Double-check warning heal state before ringing gong
-                                    // This prevents gong from ringing just as we enter healing mode
                                     var currentHpPercent = _hpPct;
                                     if (currentHpPercent <= th.WarningHealHpPercent && th.WarningHealHpPercent > 0)
                                     {
-                                        _logger.LogInformation("AutoGong prevented - HP {hp}% at warning heal level {thresh}% (last-second check)", currentHpPercent, th.WarningHealHpPercent);
+                                        _logger.LogInformation("AutoGong prevented - HP {hp}% at warning heal level {thresh}%", currentHpPercent, th.WarningHealHpPercent);
                                         if (!_waitingForHealTimers)
                                         {
                                             _waitingForHealTimers = true;
-                                            _client.SendCommand("stop"); // Ensure we stop any ongoing actions
+                                            _client.SendCommand("stop");
                                         }
-                                        return; // Exit without ringing gong
+                                        return;
                                     }
                                     
                                     _inGongCycle = true;
-                                    _attackedMonsters.Clear(); // Clear attack tracking for new gong cycle
+                                    _attackedMonsters.Clear();
                                     _lastGongAction = now;
                                     _client.SendCommand("r g");
-                                    _logger.LogInformation("AutoGong rung gong (r g) - starting new cycle (HP: {hp}%)", currentHpPercent);
+                                    _logger.LogInformation("AutoGong rung gong (r g) - no aggressive monsters, timers ready (AC={ac} AT={at}, HP={hp}%)", 
+                                        _stats.Ac, _stats.At, currentHpPercent);
                                 }
                             }
-                            else if (_inGongCycle && aggressivePresent) // active cycle with monsters to attack
-                            {
-                                // Use the unified attack logic - check more frequently when monsters are present
-                                AttackAggressiveMonsters("AutoGong");
-                            }
-                            else if (_inGongCycle && !aggressivePresent) // active cycle but no more monsters
+                            // If in gong cycle but no aggressive monsters yet, wait
+                            else if (_inGongCycle && !aggressivePresent)
                             {
                                 if (!_waitingForTimers)
                                 {
+                                    // Loot after clearing monsters
                                     if (feats.PickupGold && room.Monsters.Count == 0) { _client.SendCommand("g gold"); _logger.LogTrace("AutoGong loot gold"); }
                                     if (feats.PickupSilver) { _client.SendCommand("g sil"); _logger.LogTrace("AutoGong loot silver"); }
-                                    _waitingForTimers = true; // Wait for AT/AC reset before next cycle
-                                    _logger.LogDebug("AutoGong waiting for timers reset after clearing aggressive mobs");
+                                    _waitingForTimers = true;
+                                    _logger.LogDebug("AutoGong waiting for timers reset (AC={ac} AT={at})", _stats.Ac, _stats.At);
                                 }
                             }
                         }
                         else
                         {
-                            // No room information yet - this might be an issue
                             _logger.LogTrace("AutoGong: No room information available yet");
                         }
                     }
                 }
                 else
                 {
-                    // No valid stats yet
                     _logger.LogTrace("AutoGong: No valid stats available yet (MaxHp={maxHp})", _stats.MaxHp);
                 }
             }
             _lastAutoGongEnabled = feats.AutoGong;
             // ---------- End Auto Gong ----------
 
-            // ---------- Independent AutoAttack (when AutoGong is disabled) ----------
-            // This provides attack functionality separate from gong automation
-            if (feats.AutoAttack && !feats.AutoGong && _stats.MaxHp > 0)
+            // ---------- AutoAttack (handles all aggressive monsters) ----------
+            // This runs when AutoAttack is enabled (either manually or via AutoGong)
+            if (feats.AutoAttack && _stats.MaxHp > 0)
             {
                 var hpPercent = _hpPct;
                 
@@ -544,7 +568,9 @@ public class AutomationFeatureService : IDisposable
                         var aggressivePresent = room.Monsters.Any(m => m.Disposition.Equals("aggressive", StringComparison.OrdinalIgnoreCase));
                         if (aggressivePresent)
                         {
-                            AttackAggressiveMonsters("AutoAttack-Independent");
+                            // Determine context based on whether AutoGong is enabled
+                            var context = feats.AutoGong ? "AutoGong->AutoAttack" : "AutoAttack";
+                            AttackAggressiveMonsters(context);
                         }
                     }
                 }
@@ -553,7 +579,7 @@ public class AutomationFeatureService : IDisposable
                     _logger.LogDebug("AutoAttack paused - HP {hp}% below threshold {thresh}%", hpPercent, th.GongMinHpPercent);
                 }
             }
-            // ---------- End Independent AutoAttack ----------
+            // ---------- End AutoAttack ----------
 
             // Auto heal (enhanced with warning level support)
             if (feats.AutoHeal && th.AutoHealHpPercent > 0 && _stats.MaxHp > 0)
@@ -764,62 +790,16 @@ public class AutomationFeatureService : IDisposable
 
     private void OnMonsterBecameAggressive(string monsterName)
     {
-        _logger.LogInformation("Monster '{monster}' became aggressive - triggering immediate attack check", monsterName);
+        _logger.LogInformation("Monster '{monster}' became aggressive - AutoAttack will handle it", monsterName);
         
-        // If AutoGong is enabled and we're not in critical health, immediately check for attack
         var feats = _profile.Features;
-        if (feats.AutoGong && _stats.MaxHp > 0)
+        
+        // Auto-attack will handle aggressive monsters (whether triggered by AutoGong or standalone)
+        if (feats.AutoAttack && _stats.MaxHp > 0)
         {
             var hpPercent = _hpPct;
             var th = _profile.Thresholds;
             
-            // ENHANCED CHECK: Verify both GongMinHpPercent and WarningHealHpPercent
-            if (hpPercent >= th.GongMinHpPercent && !_waitingForHealTimers)
-            {
-                // Additional safety check for warning heal level
-                if (hpPercent <= th.WarningHealHpPercent && th.WarningHealHpPercent > 0)
-                {
-                    _logger.LogInformation("AutoGong cannot attack '{monster}' - HP {hp}% at warning heal level {thresh}%", monsterName, hpPercent, th.WarningHealHpPercent);
-                    if (!_waitingForHealTimers)
-                    {
-                        _waitingForHealTimers = true;
-                        _client.SendCommand("stop");
-                    }
-                    return;
-                }
-                
-                // If we're waiting for timers, reset and enter combat mode immediately
-                if (_waitingForTimers)
-                {
-                    _waitingForTimers = false;
-                    _inGongCycle = true;
-                    _logger.LogInformation("AutoGong entering combat mode due to aggressive monster '{monster}' - bypassing timer wait", monsterName);
-                }
-                else if (!_inGongCycle)
-                {
-                    // Force entry into combat mode even if we weren't in a gong cycle
-                    _inGongCycle = true;
-                    _logger.LogInformation("AutoGong forced into combat mode due to aggressive monster '{monster}'", monsterName);
-                }
-                
-                // Trigger immediate attack check - don't wait for the next evaluation cycle
-                AttackAggressiveMonsters("AutoGong-Immediate");
-            }
-            else if (_waitingForHealTimers)
-            {
-                _logger.LogInformation("AutoGong cannot attack '{monster}' - waiting for heal timers (HP: {hp}%)", monsterName, hpPercent);
-            }
-            else
-            {
-                _logger.LogWarning("AutoGong cannot attack '{monster}' - HP {hp}% below threshold {thresh}%", monsterName, hpPercent, th.GongMinHpPercent);
-            }
-        }
-        else if (feats.AutoAttack && !feats.AutoGong && _stats.MaxHp > 0)
-        {
-            var hpPercent = _hpPct;
-            var th = _profile.Thresholds;
-            
-            // Independent AutoAttack mode - respect warning heal state
             if (hpPercent >= th.GongMinHpPercent && !_waitingForHealTimers)
             {
                 // Additional safety check for warning heal level
@@ -834,8 +814,25 @@ public class AutomationFeatureService : IDisposable
                     return;
                 }
                 
-                _logger.LogDebug("AutoAttack triggered for aggressive monster '{monster}'", monsterName);
-                AttackAggressiveMonsters("AutoAttack-Immediate");
+                // If AutoGong is enabled, ensure we're in combat mode
+                if (feats.AutoGong)
+                {
+                    if (_waitingForTimers)
+                    {
+                        _waitingForTimers = false;
+                        _inGongCycle = true;
+                        _logger.LogInformation("AutoGong entering combat mode due to aggressive monster '{monster}'", monsterName);
+                    }
+                    else if (!_inGongCycle)
+                    {
+                        _inGongCycle = true;
+                        _logger.LogInformation("AutoGong forced into combat mode due to aggressive monster '{monster}'", monsterName);
+                    }
+                }
+                
+                // Trigger immediate attack check
+                var context = feats.AutoGong ? "AutoGong->AutoAttack-Immediate" : "AutoAttack-Immediate";
+                AttackAggressiveMonsters(context);
             }
             else if (_waitingForHealTimers)
             {
@@ -848,7 +845,7 @@ public class AutomationFeatureService : IDisposable
         }
         else
         {
-            _logger.LogDebug("No auto-attack configured for aggressive monster '{monster}' (AutoGong={gong}, AutoAttack={attack})", monsterName, feats.AutoGong, feats.AutoAttack);
+            _logger.LogDebug("No auto-attack configured for aggressive monster '{monster}' (AutoAttack={attack})", monsterName, feats.AutoAttack);
         }
     }
 
