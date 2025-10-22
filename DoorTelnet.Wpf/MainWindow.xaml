@@ -56,6 +56,9 @@
                                 <Setter Property="Padding" Value="6,3"/>
                                 <Setter Property="Cursor" Value="Hand"/>
                                 <Style.Triggers>
+                                    <Trigger Property="IsMouseOver" Value="True">
+                                        <Setter Property="Background" Value="{StaticResource Brush.AccentLight}"/>
+                                    </Trigger>
                                     <Trigger Property="IsChecked" Value="True">
                                         <Setter Property="Background" Value="{StaticResource Brush.Accent}"/>
                                         <Setter Property="BorderBrush" Value="{StaticResource Brush.AccentLight}"/>
@@ -75,6 +78,9 @@
                                 <Setter Property="Padding" Value="6,3"/>
                                 <Setter Property="Cursor" Value="Hand"/>
                                 <Style.Triggers>
+                                    <Trigger Property="IsMouseOver" Value="True">
+                                        <Setter Property="Background" Value="{StaticResource Brush.AccentLight}"/>
+                                    </Trigger>
                                     <Trigger Property="IsChecked" Value="True">
                                         <Setter Property="Background" Value="{StaticResource Brush.Accent}"/>
                                         <Setter Property="BorderBrush" Value="{StaticResource Brush.AccentLight}"/>
@@ -83,9 +89,23 @@
                             </Style>
                         </ToggleButton.Style>
                     </ToggleButton>
-                    <Button Width="140" Margin="0,0,8,0" Content="Copy Buffer w/ Colors" Command="{Binding CopyBufferWithColorsCommand}" 
-                            ToolTip="Copy the terminal screen buffer with color code information for each line - useful for debugging color-based parsing" />
-                    <Button x:Name="ConnectButton" Width="110" Content="{Binding ConnectButtonText}" Command="{Binding ToggleConnectionCommand}" Click="ConnectButton_Click" />
+                    <Button x:Name="ConnectButton" Width="110" Content="{Binding ConnectButtonText}" Command="{Binding ToggleConnectionCommand}" Click="ConnectButton_Click">
+                        <Button.Style>
+                            <Style TargetType="Button">
+                                <Setter Property="Foreground" Value="{StaticResource Brush.Text}"/>
+                                <Setter Property="Background" Value="{StaticResource Brush.Panel}"/>
+                                <Setter Property="BorderBrush" Value="{StaticResource Brush.Border}"/>
+                                <Setter Property="BorderThickness" Value="1"/>
+                                <Setter Property="Padding" Value="6,3"/>
+                                <Setter Property="Cursor" Value="Hand"/>
+                                <Style.Triggers>
+                                    <Trigger Property="IsMouseOver" Value="True">
+                                        <Setter Property="Background" Value="{StaticResource Brush.AccentLight}"/>
+                                    </Trigger>
+                                </Style.Triggers>
+                            </Style>
+                        </Button.Style>
+                    </Button>
                 </StackPanel>
                 <Menu Background="{StaticResource Brush.Panel}" BorderThickness="0" ItemContainerStyle="{StaticResource DarkMenuItemStyle}">
                     <MenuItem Header="_File">
@@ -113,6 +133,11 @@
                     </MenuItem>
                     <MenuItem Header="_Help">
                         <MenuItem Header="About" />
+                        <Separator />
+                        <MenuItem Header="Debug">
+                            <MenuItem Header="Copy Buffer w/ Colors" Command="{Binding CopyBufferWithColorsCommand}" 
+                                      ToolTip="Copy the terminal screen buffer with detailed color information - useful for debugging color-based parsing" />
+                        </MenuItem>
                     </MenuItem>
                 </Menu>
             </DockPanel>

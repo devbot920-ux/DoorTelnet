@@ -14,6 +14,7 @@ using DoorTelnet.Core.Telnet;
 using DoorTelnet.Core.World;
 using DoorTelnet.Core.Combat;
 using DoorTelnet.Core.Player;
+using DoorTelnet.Core.Session; // NEW: Add session management
 using DoorTelnet.Wpf.Services;
 
 namespace DoorTelnet.Wpf;
@@ -39,16 +40,21 @@ public partial class App : Application
                 lb.ClearProviders();
                 lb.AddDebug();
                 lb.AddConsole();
-                lb.SetMinimumLevel(LogLevel.Trace); // Set minimum log level to capture all logs
+                lb.SetMinimumLevel(LogLevel.Trace);
             })
             .ConfigureServices((ctx, services) =>
             {
                 var config = ctx.Configuration;
                 services.AddSingleton<IConfiguration>(config);
-                // logging provider registration - moved higher in priority
+                
+                // logging provider registration
                 services.AddSingleton<LogBuffer>(_ => new LogBuffer(500));
                 services.AddSingleton<WpfLogProvider>();
                 services.AddSingleton<LogViewModel>();
+
+                // NEW: Game session manager - registered early
+                services.AddSingleton<GameSessionManager>(sp => 
+                    new GameSessionManager(sp.GetRequiredService<ILogger<GameSessionManager>>()));
 
                 // Core singletons
                 services.AddSingleton<ScreenBuffer>(_ => new ScreenBuffer(
@@ -60,7 +66,6 @@ public partial class App : Application
                 services.AddSingleton<RoomTracker>(sp =>
                 {
                     var roomTracker = new RoomTracker();
-                    // Wire up ScreenBuffer for color-based parsing
                     var screenBuffer = sp.GetRequiredService<ScreenBuffer>();
                     roomTracker.SetScreenBuffer(screenBuffer);
                     return roomTracker;
@@ -69,10 +74,7 @@ public partial class App : Application
                 {
                     var roomTracker = sp.GetRequiredService<RoomTracker>();
                     var combatTracker = new CombatTracker(roomTracker);
-                    
-                    // Set up bi-directional connection for unified death handling
                     roomTracker.CombatTracker = combatTracker;
-                    
                     return combatTracker;
                 });
                 services.AddSingleton<PlayerProfile>();
@@ -81,7 +83,7 @@ public partial class App : Application
                 services.AddSingleton(sp => new CharacterProfileStore(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "DoorTelnet", "characters.json")));
                 services.AddSingleton<UserSelectionService>();
 
-                // Navigation services (Phase 1 & 2)
+                // Navigation services
                 services.AddSingleton<DoorTelnet.Core.Navigation.Services.GraphDataService>();
                 services.AddSingleton<DoorTelnet.Core.Navigation.Services.PathfindingService>();
                 services.AddSingleton<DoorTelnet.Core.Navigation.Services.RoomMatchingService>();
@@ -108,27 +110,34 @@ public partial class App : Application
                     // Configure debug logging
                     DoorTelnet.Core.Combat.CombatLineParser.SetDebugLogging(combatDebug);
                     DoorTelnet.Core.World.RoomTextProcessor.SetDebugLogging(roomDebug);
-                    
-                    // Configure color logging
                     DoorTelnet.Core.Terminal.AnsiParser.EnableColorLogging = colorLogging;
                     DoorTelnet.Core.World.RoomParser.EnableColorLogging = roomColorLogging;
 
+                    // NEW: Get game session manager
+                    var sessionManager = sp.GetRequiredService<GameSessionManager>();
+                    
                     var roomTracker = sp.GetRequiredService<RoomTracker>();
                     var combatTracker = sp.GetRequiredService<CombatTracker>();
-                    // REMOVED: var roomVm = sp.GetRequiredService<RoomViewModel>(); // This causes circular dependency!
                     var userSelection = sp.GetRequiredService<UserSelectionService>();
                     var characterStore = sp.GetRequiredService<CharacterProfileStore>();
-                    
-                    // REMOVED: roomTracker.RoomChanged += _ => Current?.Dispatcher.BeginInvoke(roomVm.Refresh);
-                    // This subscription will be handled in MainWindow registration where RoomViewModel is available
                     
                     var screenField = typeof(ScriptEngine).GetField("_screen", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
 
                     var client = new TelnetClient(cols, rows, script, rules, logger, diagnostics, raw, dumb, stats);
 
+                    // NEW: Hook up session manager events
+                    sessionManager.RequestEnterCommand += () =>
+                    {
+                        logger.LogInformation("Session manager requesting enter command");
+                        client.SendCommand(""); // Send enter
+                    };
+
                     DateTime lastXpSent = DateTime.MinValue;
                     combatTracker.RequestExperienceCheck += () =>
                     {
+                        // NEW: Only process if in game
+                        if (!sessionManager.ShouldProcessGameData()) return;
+                        
                         if ((DateTime.UtcNow - lastXpSent).TotalMilliseconds < 700) return;
                         lastXpSent = DateTime.UtcNow;
                         client.SendCommand("xp");
@@ -138,15 +147,21 @@ public partial class App : Application
                     bool initialCommandsSent = false;
                     void SendInitialCore()
                     {
+                        // NEW: Only send if in game
+                        if (!sessionManager.ShouldProcessGameData())
+                        {
+                            logger.LogDebug("Skipping initial commands - not in game state");
+                            return;
+                        }
+                        
                         client.SendCommand("inv");
                         client.SendCommand("st2");
                         client.SendCommand("stats");
                         client.SendCommand("spells");
                         client.SendCommand("inv");
-                        client.SendCommand("xp"); // Initial XP request
+                        client.SendCommand("xp");
                         logger.LogInformation("Initial data commands dispatched (inv, st2, stats, spells, inv, xp)");
                         
-                        // Request XP again after a short delay to ensure we capture it
                         _ = System.Threading.Tasks.Task.Run(async () =>
                         {
                             await System.Threading.Tasks.Task.Delay(2000);
@@ -169,9 +184,7 @@ public partial class App : Application
 
                     // REGEX for block parsing
                     var spellLine = new Regex(@"^(?<mana>\d+)\s+(?<diff>\d+)\s+(?<nick>[a-zA-Z][a-zA-Z0-9]*)\s+(?<sphere>[A-Z])\s+(?<long>.+?)\s*$", RegexOptions.Compiled);
-                    var healLine = new Regex(@"^(?<short>[A-Za-z]+)\s*->\s*(?<spell>[A-Za-z ]+)\s*\(heals:?\s*(?<amt>\d+)\)", RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
-                    // Inventory parsing helpers (two styles: compact items line in st2, and raw inventory list between prompts)
                     PlayerProfile profile = sp.GetRequiredService<PlayerProfile>();
 
                     void PersistCharacterIfNew()
@@ -182,7 +195,6 @@ public partial class App : Application
                             if (string.IsNullOrWhiteSpace(username)) username = "default";
                             var name = profile.Player.Name;
                             if (string.IsNullOrWhiteSpace(name)) return;
-                            // Only persist if not already there
                             characterStore.EnsureCharacterWithMeta(username,
                                 name,
                                 profile.Player.FirstName,
@@ -199,6 +211,9 @@ public partial class App : Application
 
                     void ParseScreenSnapshot()
                     {
+                        // NEW: Only parse if in game
+                        if (!sessionManager.ShouldProcessGameData()) return;
+                        
                         var screen = screenField?.GetValue(script) as ScreenBuffer;
                         if (screen == null) return;
                         var text = screen.ToText();
@@ -404,6 +419,7 @@ public partial class App : Application
                                 }
                             }
                         }
+                        
                         // Incarnations parsing integration
                         if (text.Contains("Incarnations", StringComparison.OrdinalIgnoreCase))
                         {
@@ -427,51 +443,63 @@ public partial class App : Application
                         }
                         PersistCharacterIfNew();
                     }
+                    
                     client.LineReceived += line =>
                     {
                         try
                         {
-                            roomTracker.AddLine(line);
-                            combatTracker.ProcessLine(line);
-
-                            // Minimal single-line fallback for name/class if not yet set
-                            if (profile.Player.Name.Length == 0 || profile.Player.Class.Length == 0)
+                            // NEW: Always let session manager see lines for state detection
+                            sessionManager.ProcessLine(line);
+                            
+                            // NEW: Always parse stats lines regardless of game state
+                            // This ensures the UI updates immediately when stats appear
+                            stats.ParseIfStatsLine(line);
+                            
+                            // NEW: Gate tracking data processing
+                            if (sessionManager.ShouldProcessGameData())
                             {
-                                var mc = Regex.Match(line, @"Name\s*:?\s*(?<nm>[A-Za-z][A-ZaZ]+).{0,40}Class\s*:?\s*(?<cls>[A-Za-z]+)", RegexOptions.IgnoreCase);
-                                if (mc.Success)
+                                roomTracker.AddLine(line);
+                                combatTracker.ProcessLine(line);
+
+                                // Minimal single-line fallback for name/class
+                                if (profile.Player.Name.Length == 0 || profile.Player.Class.Length == 0)
                                 {
-                                    profile.SetNameClass(mc.Groups["nm"].Value.Trim(), mc.Groups["cls"].Value.Trim());
+                                    var mc = Regex.Match(line, @"Name\s*:?\s*(?<nm>[A-Za-z][A-ZaZ]+).{0,40}Class\s*:?\s*(?<cls>[A-Za-z]+)", RegexOptions.IgnoreCase);
+                                    if (mc.Success)
+                                    {
+                                        profile.SetNameClass(mc.Groups["nm"].Value.Trim(), mc.Groups["cls"].Value.Trim());
+                                        PersistCharacterIfNew();
+                                    }
+                                }
+
+                                // Snapshot parse
+                                if (Environment.TickCount % 7 == 0)
+                                {
+                                    ParseScreenSnapshot();
+                                }
+
+                                // XP processing
+                                var xpMatch = Regex.Match(line, @"\[Cur:\s*(?<cur>\d+)\s+Nxt:\s*(?<nxt>\d+)\s+Left:\s*(?<left>\d+)\]", RegexOptions.IgnoreCase);
+                                if (xpMatch.Success)
+                                {
+                                    if (long.TryParse(xpMatch.Groups["cur"].Value, out var curXp)) 
+                                    {
+                                        profile.SetExperience(curXp);
+                                        logger.LogDebug("XP updated from line: Current={currentXp}", curXp);
+                                    }
+                                    if (long.TryParse(xpMatch.Groups["left"].Value, out var leftXp)) 
+                                    {
+                                        profile.SetXpLeft(leftXp);
+                                        logger.LogDebug("XP Left updated from line: Left={leftXp}", leftXp);
+                                    }
                                     PersistCharacterIfNew();
                                 }
-                            }
 
-                            // After any line we can snapshot parse (cheap enough; throttle with simple modulus)
-                            if (Environment.TickCount % 7 == 0)
-                            {
-                                ParseScreenSnapshot();
-                            }
-
-                            // Enhanced XP processing - check every line for XP information
-                            var xpMatch = Regex.Match(line, @"\[Cur:\s*(?<cur>\d+)\s+Nxt:\s*(?<nxt>\d+)\s+Left:\s*(?<left>\d+)\]", RegexOptions.IgnoreCase);
-                            if (xpMatch.Success)
-                            {
-                                if (long.TryParse(xpMatch.Groups["cur"].Value, out var curXp)) 
+                                var screen = screenField?.GetValue(script) as ScreenBuffer;
+                                if (screen != null)
                                 {
-                                    profile.SetExperience(curXp);
-                                    logger.LogDebug("XP updated from line: Current={currentXp}", curXp);
+                                    roomTracker.TryUpdateRoom("defaultUser", "defaultChar", screen.ToText());
                                 }
-                                if (long.TryParse(xpMatch.Groups["left"].Value, out var leftXp)) 
-                                {
-                                    profile.SetXpLeft(leftXp);
-                                    logger.LogDebug("XP Left updated from line: Left={leftXp}", leftXp);
-                                }
-                                PersistCharacterIfNew();
-                            }
-
-                            var screen = screenField?.GetValue(script) as ScreenBuffer;
-                            if (screen != null)
-                            {
-                                roomTracker.TryUpdateRoom("defaultUser", "defaultChar", screen.ToText());
                             }
                         }
                         catch { }
@@ -482,12 +510,11 @@ public partial class App : Application
                         await System.Threading.Tasks.Task.Delay(4000);
                         TrySendInitial();
                     });
+                    
                     return client;
                 });
 
                 services.AddSingleton<PlayerProfile>();
-                
-                // Navigation feature service (Phase 3) - moved before AutomationFeatureService
                 services.AddSingleton<NavigationFeatureService>();
                 
                 services.AddSingleton<AutomationFeatureService>(sp =>
@@ -498,7 +525,7 @@ public partial class App : Application
                     var room = sp.GetRequiredService<RoomTracker>();
                     var combat = sp.GetRequiredService<CombatTracker>();
                     var charStore = sp.GetRequiredService<CharacterProfileStore>();
-                    var navigationService = sp.GetRequiredService<NavigationFeatureService>(); // NEW injection
+                    var navigationService = sp.GetRequiredService<NavigationFeatureService>();
                     var logger = sp.GetRequiredService<ILogger<AutomationFeatureService>>();
                     
                     return new AutomationFeatureService(stats, profile, client, room, combat, charStore, logger, navigationService);
@@ -525,20 +552,27 @@ public partial class App : Application
 
                 services.AddSingleton<MainWindow>(sp =>
                 {
-                    // Register WPF log provider with the logger factory first
                     var loggerFactory = sp.GetRequiredService<ILoggerFactory>();
                     var wpfLogProvider = sp.GetRequiredService<WpfLogProvider>();
                     loggerFactory.AddProvider(wpfLogProvider);
                     
-                    // Create AutomationFeatureService which will start generating log entries
                     _ = sp.GetRequiredService<AutomationFeatureService>();
                     
-                    // Set up the RoomTracker -> RoomViewModel connection now that both services exist
                     var roomTracker = sp.GetRequiredService<RoomTracker>();
                     var roomVm = sp.GetRequiredService<RoomViewModel>();
                     roomTracker.RoomChanged += _ => Current?.Dispatcher.BeginInvoke(roomVm.Refresh);
                     
-                    // Initialize navigation graph data
+                    // NEW: Hook up session manager to MainViewModel for character data clearing
+                    var sessionManager = sp.GetRequiredService<GameSessionManager>();
+                    var mainViewModel = sp.GetRequiredService<MainViewModel>();
+                    sessionManager.RequestClearCharacterData += () =>
+                    {
+                        Current?.Dispatcher.Invoke(() =>
+                        {
+                            mainViewModel.ClearAllCharacterData();
+                        });
+                    };
+                    
                     _ = Task.Run(async () =>
                     {
                         try
@@ -575,7 +609,7 @@ public partial class App : Application
                         }
                     });
                     
-                    var w = new MainWindow { DataContext = sp.GetRequiredService<MainViewModel>(), LogVm = sp.GetRequiredService<LogViewModel>() };
+                    var w = new MainWindow { DataContext = mainViewModel, LogVm = sp.GetRequiredService<LogViewModel>() };
                     var settings = sp.GetRequiredService<ISettingsService>();
                     var ui = settings.Get().UI;
                     if (ui.Width > 400 && ui.Height > 300)
@@ -592,7 +626,7 @@ public partial class App : Application
                     return w;
                 });
 
-                // Game API Service (for MCP Bridge integration)
+                // Game API Service
                 if (bool.TryParse(config["api:enabled"], out var apiEnabled) && apiEnabled)
                 {
                     var apiPort = int.TryParse(config["api:port"], out var ap) ? ap : 5000;
@@ -613,7 +647,6 @@ public partial class App : Application
         _host.Start();
         var mainWindow = _host.Services.GetRequiredService<MainWindow>();
         
-        // Start Game API Service if enabled
         if (bool.TryParse(_host.Services.GetRequiredService<IConfiguration>()["api:enabled"], out var apiEnabledStart) && apiEnabledStart)
         {
             _ = Task.Run(async () =>

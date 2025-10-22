@@ -25,12 +25,18 @@ public partial class MainViewModel : ViewModelBase
     private readonly IConfiguration _config;
     private readonly StatsTracker _statsTracker;
     private readonly CombatTracker _combatTracker;
-    private readonly RoomTracker _roomTracker; // NEW: Add RoomTracker dependency
+    private readonly RoomTracker _roomTracker;
     private readonly ISettingsService _settingsService;
     private readonly System.IServiceProvider _serviceProvider;
     private readonly CredentialStore _credentialStore;
     private readonly PlayerProfile _profile;
     private readonly UserSelectionService _userSelection; // new shared selection service
+
+    // NEW: Add GameSessionManager reference
+    private DoorTelnet.Core.Session.GameSessionManager? _sessionManager;
+
+    // NEW: Expose current game state for UI binding
+    public DoorTelnet.Core.Session.GameState CurrentGameState => _sessionManager?.CurrentState ?? DoorTelnet.Core.Session.GameState.Disconnected;
 
     public StatsViewModel Stats { get; }
     public RoomViewModel Room { get; }
@@ -99,7 +105,7 @@ public partial class MainViewModel : ViewModelBase
         RoomViewModel roomViewModel,
         CombatViewModel combatViewModel,
         CombatTracker combatTracker,
-        RoomTracker roomTracker, // NEW: Add RoomTracker parameter
+        RoomTracker roomTracker,
         ISettingsService settingsService,
         System.IServiceProvider serviceProvider,
         CredentialStore credentialStore,
@@ -110,7 +116,7 @@ public partial class MainViewModel : ViewModelBase
         _config = config;
         _statsTracker = statsTracker;
         _combatTracker = combatTracker;
-        _roomTracker = roomTracker; // NEW: Assign RoomTracker
+        _roomTracker = roomTracker;
         _settingsService = settingsService;
         _serviceProvider = serviceProvider;
         _credentialStore = credentialStore;
@@ -120,6 +126,26 @@ public partial class MainViewModel : ViewModelBase
         Room = roomViewModel;
         Combat = combatViewModel;
         ConnectionStatus = "Disconnected";
+
+        // NEW: Try to get session manager (it might not be available during initialization)
+        try
+        {
+            _sessionManager = serviceProvider.GetService<DoorTelnet.Core.Session.GameSessionManager>();
+            
+            // NEW: Subscribe to session state changes
+            if (_sessionManager != null)
+            {
+                _sessionManager.StateChanged += OnGameStateChanged;
+                _sessionManager.RequestEnterCommand += OnRequestEnterCommand;
+                _sessionManager.RequestClearCharacterData += ClearAllCharacterData;
+                
+                logger.LogInformation("GameSessionManager events subscribed successfully");
+            }
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Failed to subscribe to GameSessionManager events");
+        }
 
         // Test logging functionality
         logger.LogInformation("MainViewModel initialized successfully");
@@ -285,7 +311,10 @@ public partial class MainViewModel : ViewModelBase
             await _client.ConnectAsync(host, port);
             await _client.StartAsync();
             IsConnected = true;
-            ConnectionStatus = $"Connected"; // simplified status text
+            ConnectionStatus = $"Connected";
+            
+            // NEW: Notify session manager of connection
+            _sessionManager?.OnConnected();
         }
         finally { IsBusy = false; }
     }
@@ -300,8 +329,8 @@ public partial class MainViewModel : ViewModelBase
             IsConnected = false;
             ConnectionStatus = "Disconnected";
             
-            // NEW: Automatically clear all character data when disconnecting
-            ClearAllCharacterData();
+            // NEW: Notify session manager of disconnection (will trigger character data clearing)
+            _sessionManager?.OnDisconnected();
         }
         finally { IsBusy = false; }
     }
@@ -513,8 +542,64 @@ public partial class MainViewModel : ViewModelBase
         win.ShowDialog();
     }
 
+    // NEW: Handle game state changes to update connection status and button text
+    private void OnGameStateChanged(DoorTelnet.Core.Session.GameState previousState, DoorTelnet.Core.Session.GameState newState)
+    {
+        App.Current.Dispatcher.Invoke(() =>
+        {
+            // Update connection status to show current state
+            ConnectionStatus = newState switch
+            {
+                DoorTelnet.Core.Session.GameState.Disconnected => "Disconnected",
+                DoorTelnet.Core.Session.GameState.Connected => "Connected",
+                DoorTelnet.Core.Session.GameState.AtLoginPrompt => "At Login Prompt",
+                DoorTelnet.Core.Session.GameState.AtPasswordPrompt => "At Password Prompt",
+                DoorTelnet.Core.Session.GameState.AtCharacterSelection => "Character Selection",
+                DoorTelnet.Core.Session.GameState.InGame => "In Game",
+                _ => "Unknown"
+            };
+            
+            // Update button text and game state property
+            OnPropertyChanged(nameof(ConnectButtonText));
+            OnPropertyChanged(nameof(CurrentGameState));
+            
+            _logger.LogInformation("Game state changed: {PreviousState} -> {NewState}", previousState, newState);
+            
+            // NEW: Automatically send initial data when entering game
+            if (newState == DoorTelnet.Core.Session.GameState.InGame && 
+                previousState != DoorTelnet.Core.Session.GameState.InGame)
+            {
+                _logger.LogInformation("Entered game state - automatically requesting initial stats");
+                // Small delay to ensure we're fully in-game
+                Task.Run(async () =>
+                {
+                    await Task.Delay(500);
+                    App.Current.Dispatcher.Invoke(() => SendInitialData());
+                });
+            }
+        });
+    }
+
+    // NEW: Handle request to send enter command
+    private void OnRequestEnterCommand()
+    {
+        App.Current.Dispatcher.Invoke(() =>
+        {
+            _logger.LogInformation("Session manager requested enter command");
+            _client.SendCommand(""); // Send empty command (Enter key)
+        });
+    }
+
     protected override void OnDisposing()
     {
+        // NEW: Unsubscribe from session manager events
+        if (_sessionManager != null)
+        {
+            _sessionManager.StateChanged -= OnGameStateChanged;
+            _sessionManager.RequestEnterCommand -= OnRequestEnterCommand;
+            _sessionManager.RequestClearCharacterData -= ClearAllCharacterData;
+        }
+        
         if (IsConnected)
         {
             _ = DisconnectAsync();
@@ -548,8 +633,9 @@ public partial class MainViewModel : ViewModelBase
     /// <summary>
     /// Clears all character data including HP, XP, location, monsters, combat info, etc.
     /// Used when disconnecting or manually resetting character data.
+    /// Made public so GameSessionManager can call it.
     /// </summary>
-    private void ClearAllCharacterData()
+    public void ClearAllCharacterData()
     {
         try
         {
@@ -562,13 +648,11 @@ public partial class MainViewModel : ViewModelBase
             _combatTracker.ClearHistory();
             
             // 3. Clear room tracker (current room, monsters, location data)
-            // Use reflection to clear CurrentRoom since there's no public clear method
             try
             {
                 var currentRoomField = _roomTracker.GetType().GetProperty("CurrentRoom");
                 currentRoomField?.SetValue(_roomTracker, null);
                 
-                // Also clear internal room and edge data if accessible
                 var roomsField = _roomTracker.GetType().GetField("_rooms", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
                 var edgesField = _roomTracker.GetType().GetField("_edges", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
                 var adjacentRoomDataField = _roomTracker.GetType().GetField("_adjacentRoomData", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
@@ -578,13 +662,11 @@ public partial class MainViewModel : ViewModelBase
                 if (edgesField?.GetValue(_roomTracker) is System.Collections.IDictionary edges) edges.Clear();
                 if (adjacentRoomDataField?.GetValue(_roomTracker) is System.Collections.IDictionary adjRooms) adjRooms.Clear();
                 
-                // Clear line buffer if available
                 if (lineBufferField?.GetValue(_roomTracker) != null)
                 {
                     var clearMethod = lineBufferField.FieldType.GetMethod("Clear", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance);
                     if (clearMethod == null)
                     {
-                        // Try to clear the internal lines collection
                         var linesField = lineBufferField.FieldType.GetField("_lines", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
                         if (linesField?.GetValue(lineBufferField.GetValue(_roomTracker)) is System.Collections.IList lines)
                         {
@@ -603,7 +685,6 @@ public partial class MainViewModel : ViewModelBase
             }
             
             // 4. Clear stats tracker data (HP, MP, etc.)
-            // Use reflection to reset stats since there's no public clear method
             try
             {
                 var statsProps = _statsTracker.GetType().GetProperties(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance)
@@ -624,12 +705,12 @@ public partial class MainViewModel : ViewModelBase
                 _logger.LogWarning(ex, "Failed to fully clear stats tracker data");
             }
             
-            // 5. Clear ViewModels to refresh UI - just trigger property updates
-            Room.Refresh();  // This should clear the room display
-            Combat.ClearHistoryCommand?.Execute(null); // This clears the combat UI
+            // 5. Clear ViewModels to refresh UI
+            Room.Refresh();
+            Combat.ClearHistoryCommand?.Execute(null);
             
             // 6. Update all UI bindings
-            RaiseProfileBar(); // Updates all status bar properties
+            RaiseProfileBar();
             
             _logger.LogInformation("Character data cleared successfully");
         }

@@ -5,6 +5,7 @@ using System.Windows.Input;
 using DoorTelnet.Wpf.ViewModels;
 using Microsoft.Extensions.DependencyInjection;
 using System.Collections.Specialized;
+using DoorTelnet.Core.Session; // NEW: Add for GameState enum
 
 namespace DoorTelnet.Wpf;
 
@@ -33,13 +34,13 @@ public partial class MainWindow : Window
 
     private void LogEntries_CollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
     {
-        if (e.Action == NotifyCollectionChangedAction.Add)
+    if (e.Action == NotifyCollectionChangedAction.Add)
+    {
+        Dispatcher.BeginInvoke(() => 
         {
-            Dispatcher.BeginInvoke(() => 
-            {
-                LogScrollViewer.ScrollToEnd();
-            }, System.Windows.Threading.DispatcherPriority.Background);
-        }
+            LogScrollViewer.ScrollToEnd();
+        }, System.Windows.Threading.DispatcherPriority.Background);
+    }
     }
 
     private void FocusTerminal()
@@ -81,7 +82,26 @@ public partial class MainWindow : Window
 
     private void UserButton_Click(object sender, RoutedEventArgs e)
     {
-        // Also show context menu on left-click for better UX
+        // Check if we should trigger quick login based on game state
+        if (DataContext is MainViewModel viewModel)
+        {
+            var gameState = viewModel.CurrentGameState;
+            
+            // If we're at the login prompt, trigger quick login instead of showing menu
+            if (gameState == GameState.AtLoginPrompt || 
+                gameState == GameState.Connected)
+            {
+                // Check if quick login is available
+                if (viewModel.QuickLoginCommand?.CanExecute(null) == true)
+                {
+                    viewModel.QuickLoginCommand.Execute(null);
+                    FocusTerminal();
+                    return;
+                }
+            }
+        }
+        
+        // Default behavior: show context menu for user selection
         if (sender is Button button && button.ContextMenu != null)
         {
             button.ContextMenu.PlacementTarget = button;
