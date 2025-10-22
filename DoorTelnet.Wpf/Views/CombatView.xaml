@@ -4,77 +4,144 @@
       <RowDefinition Height="Auto"/>
       <RowDefinition Height="Auto"/>
       <RowDefinition Height="*"/>
-      <RowDefinition Height="*"/>
-      <RowDefinition Height="Auto"/>
     </Grid.RowDefinitions>
 
-    <!-- Header / actions -->
-    <StackPanel Orientation="Horizontal" Grid.Row="0" Margin="0 0 0 4" VerticalAlignment="Center">
-      <TextBlock Text="Combat" FontWeight="Bold" FontSize="14" />
-      <TextBlock Text="  ("/>
-      <TextBlock Text="{Binding ActiveCombats.Count}"/>
-      <TextBlock Text=" active)"/>
-      <Button Content="Clear" Command="{Binding ClearHistoryCommand}" Margin="12 0 0 0" Padding="6 2" />
-      <Button Content="Export" Command="{Binding ExportCsvCommand}" Margin="4 0 0 0" Padding="6 2" />
-    </StackPanel>
-
-    <!-- Summary -->
-    <Border Grid.Row="1" BorderBrush="#47535F" BorderThickness="0 0 0 1" Padding="0 0 0 4" Margin="0 0 0 4">
-      <UniformGrid Columns="5">
-        <TextBlock Text="Total:" Foreground="#C2CCD4"/>
-        <TextBlock Text="{Binding TotalCombats}"/>
-        <TextBlock Text="XP:" Foreground="#C2CCD4"/>
-        <TextBlock Text="{Binding TotalExperience}"/>
-        <TextBlock Text=""/>
-      </UniformGrid>
+    <!-- Header -->
+    <Border Grid.Row="0" Background="#1a1d21" BorderBrush="#333" BorderThickness="1" CornerRadius="3" Padding="8" Margin="0,0,0,8">
+        <Grid>
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="Auto"/>
+            </Grid.ColumnDefinitions>
+            
+            <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
+                <TextBlock Text="Combat" FontWeight="Bold" FontSize="12" Foreground="{StaticResource Brush.AccentLight}"/>
+                <Border Background="#2d2d2d" BorderBrush="#555" BorderThickness="1" CornerRadius="2" Padding="4,2" Margin="8,0,0,0">
+                    <TextBlock FontSize="9">
+                        <Run Text="{Binding ActiveCombats.Count, Mode=OneWay}" FontWeight="SemiBold"/>
+                        <Run Text=" active" Foreground="{StaticResource Brush.TextMuted}"/>
+                    </TextBlock>
+                </Border>
+            </StackPanel>
+            
+            <StackPanel Grid.Column="1" Orientation="Horizontal">
+                <Button Content="History" Command="{Binding ShowHistoryCommand}" Padding="6,3" FontSize="9" Margin="0,0,4,0"
+                        ToolTip="View detailed combat history"/>
+                <Button Content="Clear" Command="{Binding ClearHistoryCommand}" Padding="6,3" FontSize="9"/>
+            </StackPanel>
+        </Grid>
     </Border>
 
-    <!-- History Table -->
-    <StackPanel Grid.Row="2">
-      <TextBlock Text="History" FontWeight="Bold" Margin="0 0 0 4"/>
-      <DataGrid ItemsSource="{Binding CompletedCombats}" AutoGenerateColumns="False" CanUserAddRows="False" CanUserDeleteRows="False" IsReadOnly="True" RowHeaderWidth="0" FontSize="12" Height="160" HeadersVisibility="Column">
-        <DataGrid.Columns>
-          <DataGridTextColumn Header="Monster" Binding="{Binding MonsterName}" Width="*"/>
-          <DataGridTextColumn Header="Dealt" Binding="{Binding DamageDealt}" Width="70"/>
-          <DataGridTextColumn Header="Taken" Binding="{Binding DamageTaken}" Width="70"/>
-          <DataGridTextColumn Header="XP" Binding="{Binding ExperienceGained}" Width="60"/>
-          <DataGridTextColumn Header="Dur(s)" Binding="{Binding DurationSeconds, StringFormat=F1}" Width="70"/>
-          <DataGridTextColumn Header="DPS" Binding="{Binding DpsDealt, StringFormat=F1}" Width="70"/>
-          <DataGridTextColumn Header="Status" Binding="{Binding Status}" Width="90"/>
-        </DataGrid.Columns>
-      </DataGrid>
-    </StackPanel>
+    <!-- Summary Stats -->
+    <Border Grid.Row="1" Background="#1a1d21" BorderBrush="#333" BorderThickness="1" CornerRadius="3" Padding="8" Margin="0,0,0,8">
+        <Grid>
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="*"/>
+            </Grid.ColumnDefinitions>
+            
+            <StackPanel Grid.Column="0">
+                <TextBlock Text="Battles" FontSize="8" Foreground="{StaticResource Brush.TextMuted}"/>
+                <TextBlock Text="{Binding TotalCombats}" FontSize="11" FontWeight="SemiBold"/>
+            </StackPanel>
+            
+            <StackPanel Grid.Column="1">
+                <TextBlock Text="Total XP" FontSize="8" Foreground="{StaticResource Brush.TextMuted}"/>
+                <TextBlock Text="{Binding TotalExperience}" FontSize="11" FontWeight="SemiBold"/>
+            </StackPanel>
+            
+            <StackPanel Grid.Column="2">
+                <TextBlock Text="Avg DPS" FontSize="8" Foreground="{StaticResource Brush.TextMuted}"/>
+                <TextBlock Text="{Binding AvgDps, StringFormat=F1}" FontSize="11" FontWeight="SemiBold"/>
+            </StackPanel>
+            
+            <StackPanel Grid.Column="3">
+                <TextBlock Text="Win Rate" FontSize="8" Foreground="{StaticResource Brush.TextMuted}"/>
+                <TextBlock FontSize="11" FontWeight="SemiBold">
+                    <Run Text="{Binding WinRate, StringFormat=F1, Mode=OneWay}"/><Run Text="%"/>
+                </TextBlock>
+            </StackPanel>
+        </Grid>
+    </Border>
 
-    <!-- Active Combats Table -->
-    <StackPanel Grid.Row="3" Margin="0 6 0 0">
-      <TextBlock Text="Active" FontWeight="Bold" Margin="0 0 0 4"/>
-      <DataGrid ItemsSource="{Binding ActiveCombats}" AutoGenerateColumns="False" CanUserAddRows="False" CanUserDeleteRows="False" IsReadOnly="True" RowHeaderWidth="0" FontSize="12" HeadersVisibility="Column">
-        <DataGrid.Columns>
-          <DataGridTextColumn Header="Monster" Binding="{Binding MonsterName}" Width="*"/>
-          <DataGridTextColumn Header="Dealt" Binding="{Binding DamageDealt}" Width="70"/>
-          <DataGridTextColumn Header="Taken" Binding="{Binding DamageTaken}" Width="70"/>
-          <DataGridTextColumn Header="Dur(s)" Binding="{Binding DurationSeconds, StringFormat=F1}" Width="70"/>
-          <DataGridTextColumn Header="DPS" Binding="{Binding DpsDealt, StringFormat=F1}" Width="70"/>
-          <DataGridTemplateColumn Header="Target" Width="60">
-            <DataGridTemplateColumn.CellTemplate>
-              <DataTemplate>
-                <TextBlock Text="*" FontSize="16" FontWeight="Bold" HorizontalAlignment="Center" VerticalAlignment="Center" 
-                          Visibility="{Binding IsTargeted, Converter={StaticResource BoolToVisibilityConverter}}"
-                          ToolTip="This monster is currently targeted for melee combat"/>
-              </DataTemplate>
-            </DataGridTemplateColumn.CellTemplate>
-          </DataGridTemplateColumn>
-        </DataGrid.Columns>
-      </DataGrid>
-    </StackPanel>
-
-    <!-- Footer stats -->
-    <StackPanel Grid.Row="4" Orientation="Horizontal" HorizontalAlignment="Right" Opacity="0.85" Margin="0 4 0 0">
-      <TextBlock Text="Avg DPS:" FontSize="11"/>
-      <TextBlock Text=" "/>
-      <TextBlock Text="{Binding AvgDps, StringFormat=F1}" FontSize="11"/>
-      <TextBlock Text="  Win%:" FontSize="11" Margin="8 0 0 0"/>
-      <TextBlock Text="{Binding WinRate, StringFormat=F1}" FontSize="11"/>
-    </StackPanel>
+    <!-- Active Combats -->
+    <Border Grid.Row="2" Background="#1a1d21" BorderBrush="#333" BorderThickness="1" CornerRadius="3" Padding="8">
+        <Grid>
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="*"/>
+            </Grid.RowDefinitions>
+            
+            <TextBlock Grid.Row="0" Text="Active Combats" FontWeight="SemiBold" FontSize="11" Margin="0,0,0,6"/>
+            
+            <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
+                <ItemsControl ItemsSource="{Binding ActiveCombats}">
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate>
+                            <Border Background="#252829" BorderBrush="#3a3a3a" BorderThickness="1" CornerRadius="2" Padding="8,6" Margin="0,0,0,6">
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="Auto"/>
+                                    </Grid.RowDefinitions>
+                                    
+                                    <!-- Monster Name and Target Indicator -->
+                                    <StackPanel Grid.Row="0" Grid.Column="0" Orientation="Horizontal">
+                                        <TextBlock Text="{Binding MonsterName}" FontWeight="SemiBold" FontSize="11"/>
+                                        <Border Background="#FF5252" CornerRadius="2" Padding="4,1" Margin="6,0,0,0"
+                                                Visibility="{Binding IsTargeted, Converter={StaticResource BoolToVisibilityConverter}}">
+                                            <TextBlock Text="TARGET" FontSize="8" FontWeight="Bold" Foreground="White"/>
+                                        </Border>
+                                    </StackPanel>
+                                    
+                                    <!-- Duration -->
+                                    <TextBlock Grid.Row="0" Grid.Column="1" FontSize="9" Foreground="{StaticResource Brush.TextMuted}" VerticalAlignment="Center">
+                                        <Run Text="{Binding DurationSeconds, StringFormat=F1}"/><Run Text="s"/>
+                                    </TextBlock>
+                                    
+                                    <!-- Stats -->
+                                    <StackPanel Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="2" Orientation="Horizontal" Margin="0,4,0,0">
+                                        <TextBlock FontSize="9" Margin="0,0,12,0">
+                                            <Run Text="Dealt:" Foreground="{StaticResource Brush.TextMuted}"/>
+                                            <Run Text="{Binding DamageDealt}" FontWeight="SemiBold" Foreground="#4CAF50"/>
+                                        </TextBlock>
+                                        <TextBlock FontSize="9" Margin="0,0,12,0">
+                                            <Run Text="Taken:" Foreground="{StaticResource Brush.TextMuted}"/>
+                                            <Run Text="{Binding DamageTaken}" FontWeight="SemiBold" Foreground="#FF5252"/>
+                                        </TextBlock>
+                                        <TextBlock FontSize="9">
+                                            <Run Text="DPS:" Foreground="{StaticResource Brush.TextMuted}"/>
+                                            <Run Text="{Binding DpsDealt, StringFormat=F1}" FontWeight="SemiBold"/>
+                                        </TextBlock>
+                                    </StackPanel>
+                                </Grid>
+                            </Border>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+            </ScrollViewer>
+            
+            <!-- Empty state -->
+            <TextBlock Grid.Row="1" Text="No active combats" FontSize="10" Foreground="{StaticResource Brush.TextMuted}" 
+                       HorizontalAlignment="Center" VerticalAlignment="Center" Margin="0,20,0,0">
+                <TextBlock.Style>
+                    <Style TargetType="TextBlock">
+                        <Setter Property="Visibility" Value="Collapsed"/>
+                        <Style.Triggers>
+                            <DataTrigger Binding="{Binding ActiveCombats.Count, Mode=OneWay}" Value="0">
+                                <Setter Property="Visibility" Value="Visible"/>
+                            </DataTrigger>
+                        </Style.Triggers>
+                    </Style>
+                </TextBlock.Style>
+            </TextBlock>
+        </Grid>
+    </Border>
   </Grid>
 </UserControl>

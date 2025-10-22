@@ -20,6 +20,7 @@ public class CombatViewModel : ViewModelBase
     public ICommand ClearHistoryCommand { get; }
     public ICommand ExportCsvCommand { get; }
     public ICommand RefreshStatsCommand { get; }
+    public ICommand ShowHistoryCommand { get; }
 
     // Summary stats
     private int _totalCombats; public int TotalCombats { get => _totalCombats; private set => SetProperty(ref _totalCombats, value); }
@@ -39,6 +40,7 @@ public class CombatViewModel : ViewModelBase
         ClearHistoryCommand = new RelayCommand(ClearHistory);
         ExportCsvCommand = new RelayCommand(ExportCsv, () => CompletedCombats.Count > 0);
         RefreshStatsCommand = new RelayCommand(UpdateStats);
+        ShowHistoryCommand = new RelayCommand(ShowHistory, () => CompletedCombats.Count > 0);
         BootstrapExisting();
     }
 
@@ -118,6 +120,7 @@ public class CombatViewModel : ViewModelBase
             
             UpdateStats();
             (ExportCsvCommand as RelayCommand)?.NotifyCanExecuteChanged();
+            (ShowHistoryCommand as RelayCommand)?.NotifyCanExecuteChanged();
         });
     }
 
@@ -163,6 +166,15 @@ public class CombatViewModel : ViewModelBase
         CompletedCombats.Clear();
         UpdateStats();
         (ExportCsvCommand as RelayCommand)?.NotifyCanExecuteChanged();
+        (ShowHistoryCommand as RelayCommand)?.NotifyCanExecuteChanged();
+    }
+
+    private void ShowHistory()
+    {
+        // Create and show the combat history dialog
+        var dialog = new Views.Dialogs.CombatHistoryDialog(CompletedCombats);
+        dialog.Owner = App.Current.MainWindow;
+        dialog.ShowDialog();
     }
 
     private void ExportCsv()

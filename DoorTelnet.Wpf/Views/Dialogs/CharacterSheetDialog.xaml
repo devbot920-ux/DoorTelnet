@@ -2,132 +2,236 @@
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:local="clr-namespace:DoorTelnet.Wpf.Views.Dialogs"
-        Title="Character Sheet" Height="660" Width="880" Background="{StaticResource Brush.Background}" Foreground="{StaticResource Brush.Text}" WindowStartupLocation="CenterOwner">
+        Title="Character Sheet" Height="720" Width="920" Background="{StaticResource Brush.Background}" Foreground="{StaticResource Brush.Text}" WindowStartupLocation="CenterOwner">
     <Window.Resources>
         <Style x:Key="SelectAllOnFocusTextBox" TargetType="TextBox" BasedOn="{StaticResource {x:Type TextBox}}">
             <EventSetter Event="GotKeyboardFocus" Handler="TextBox_SelectAll" />
             <EventSetter Event="PreviewMouseLeftButtonDown" Handler="TextBox_PreviewMouseLeftButtonDown" />
         </Style>
+        <Style x:Key="SectionHeaderStyle" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="14"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="Foreground" Value="{StaticResource Brush.AccentLight}"/>
+            <Setter Property="Margin" Value="0,0,0,8"/>
+        </Style>
+        <Style x:Key="LabelStyle" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="11"/>
+            <Setter Property="Foreground" Value="{StaticResource Brush.TextMuted}"/>
+            <Setter Property="Margin" Value="0,0,0,4"/>
+        </Style>
+        <Style x:Key="ValueStyle" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="12"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+        </Style>
     </Window.Resources>
-    <Grid Margin="8">
-        <ScrollViewer VerticalScrollBarVisibility="Auto">
-            <StackPanel>
-                <TextBlock FontSize="20" FontWeight="Bold" Text="Character" Margin="0,0,0,8" />
-                <WrapPanel Margin="0,0,0,12">
-                    <StackPanel Margin="0,0,28,0">
-                        <TextBlock Text="Name" FontWeight="Bold"/>
-                        <TextBlock Text="{Binding Name}" FontSize="14" FontWeight="SemiBold"/>
-                    </StackPanel>
-                    <StackPanel Margin="0,0,28,0">
-                        <TextBlock Text="Class" FontWeight="Bold"/>
-                        <TextBlock Text="{Binding Class}" FontSize="14" FontWeight="SemiBold"/>
-                    </StackPanel>
-                </WrapPanel>
-
-                <GroupBox Header="Automation" Margin="0,0,0,12">
-                    <StackPanel Margin="6" Orientation="Vertical">
-                        <WrapPanel>
-                            <CheckBox Content="Auto Shield" IsChecked="{Binding AutoShield}" Margin="4"
-                                      ToolTip="Automatically casts shield spells when shield effect expires"/>
-                            <CheckBox Content="Auto Heal" IsChecked="{Binding AutoHeal}" Margin="4"
-                                      ToolTip="Automatically casts healing spells when HP drops below configured threshold"/>
-                            <CheckBox Content="Auto Gong" IsChecked="{Binding AutoGong}" Margin="4"
-                                      ToolTip="Rings gong when no AC/AT timers and no aggressive monsters present. Automatically enables Auto Attack to handle summoned monsters."/>
-                            <CheckBox Content="Auto Attack" IsChecked="{Binding AutoAttack}" Margin="4"
-                                      ToolTip="Automatically attacks aggressive monsters. Automatically enabled when Auto Gong is active, but can also be used independently."/>
-                            <CheckBox Content="Pickup Gold" IsChecked="{Binding PickupGold}" Margin="4"
-                                      ToolTip="Automatically picks up gold coins when they appear"/>
-                            <CheckBox Content="Pickup Silver" IsChecked="{Binding PickupSilver}" Margin="4"
-                                      ToolTip="Automatically picks up silver coins when they appear"/>
-                        </WrapPanel>
-                        <UniformGrid Columns="3" Margin="4,8,4,0">
-                            <StackPanel Margin="4">
-                                <TextBlock Text="Shield Refresh (sec)" FontSize="11" 
-                                          ToolTip="Minimum time between shield casting attempts"/>
-                                <TextBox Text="{Binding ShieldRefreshSec, UpdateSourceTrigger=PropertyChanged}" Width="90" Style="{StaticResource SelectAllOnFocusTextBox}" PreviewTextInput="NumericOnly" />
-                            </StackPanel>
-                            <StackPanel Margin="4">
-                                <TextBlock Text="Gong HP %" FontSize="11"
-                                          ToolTip="Minimum HP percentage required to run Auto Gong/Auto Attack"/>
-                                <TextBox Text="{Binding GongMinHpPercent, UpdateSourceTrigger=PropertyChanged}" Width="90" Style="{StaticResource SelectAllOnFocusTextBox}" PreviewTextInput="NumericOnly" />
-                            </StackPanel>
-                            <StackPanel Margin="4">
-                                <TextBlock Text="Auto Heal HP %" FontSize="11"
-                                          ToolTip="HP percentage threshold for automatic healing"/>
-                                <TextBox Text="{Binding AutoHealHpPercent, UpdateSourceTrigger=PropertyChanged}" Width="90" Style="{StaticResource SelectAllOnFocusTextBox}" PreviewTextInput="NumericOnly" />
-                            </StackPanel>
-                        </UniformGrid>
-                        <UniformGrid Columns="3" Margin="4,4,4,0">
-                            <StackPanel Margin="4">
-                                <TextBlock Text="Warning Heal HP %" FontSize="11"
-                                          ToolTip="HP percentage that stops automation and waits for timers before healing"/>
-                                <TextBox Text="{Binding WarningHealHpPercent, UpdateSourceTrigger=PropertyChanged}" Width="90" Style="{StaticResource SelectAllOnFocusTextBox}" PreviewTextInput="NumericOnly" />
-                            </StackPanel>
-                            <StackPanel Margin="4">
-                                <TextBlock Text="Critical HP %" FontSize="11"
-                                          ToolTip="Critical HP percentage for emergency actions"/>
-                                <TextBox Text="{Binding CriticalHpPercent, UpdateSourceTrigger=PropertyChanged}" Width="90" Style="{StaticResource SelectAllOnFocusTextBox}" PreviewTextInput="NumericOnly" />
-                            </StackPanel>
-                            <StackPanel Margin="4">
-                                <TextBlock Text="Critical Action" FontSize="11"
-                                          ToolTip="Action to take when critical HP is reached: stop, disconnect, or custom script"/>
-                                <ComboBox SelectedItem="{Binding CriticalAction, UpdateSourceTrigger=PropertyChanged}" 
-                                          ItemsSource="{Binding CriticalActionOptions}"
-                                          Width="90" 
-                                          IsEditable="True"
-                                          IsTextSearchEnabled="False"
-                                          ToolTip="Select or enter custom action: stop, disconnect, or script:{your_command}"/>
-                            </StackPanel>
-                        </UniformGrid>
-                    </StackPanel>
-                </GroupBox>
-
-                <Grid Margin="0,0,0,12">
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="2*"/>
-                        <ColumnDefinition Width="2*"/>
-                        <ColumnDefinition Width="3*"/>
-                    </Grid.ColumnDefinitions>
-                    <Grid.RowDefinitions>
-                        <RowDefinition Height="Auto"/>
-                        <RowDefinition Height="*"/>
-                    </Grid.RowDefinitions>
-                    <TextBlock Text="Heals" FontWeight="Bold" Grid.Column="0"/>
-                    <TextBlock Text="Shields" FontWeight="Bold" Grid.Column="1"/>
-                    <TextBlock Text="Inventory" FontWeight="Bold" Grid.Column="2"/>
-
-                    <ListBox Grid.Row="1" Grid.Column="0" ItemsSource="{Binding Heals}" Height="140" Background="#202429" BorderBrush="#333">
-                        <ListBox.ItemTemplate>
-                            <DataTemplate>
-                                <DockPanel Margin="2">
-                                    <TextBlock Text="{Binding Short}" FontWeight="Bold" Foreground="#5EC6FF" Margin="0,0,6,0"/>
-                                    <TextBlock Text="{Binding Spell}" Margin="0,0,6,0"/>
-                                    <TextBlock Text="x" Margin="0,0,4,0"/>
-                                    <TextBlock Text="{Binding Heals}"/>
-                                </DockPanel>
-                            </DataTemplate>
-                        </ListBox.ItemTemplate>
-                    </ListBox>
-                    <ListBox Grid.Row="1" Grid.Column="1" ItemsSource="{Binding Shields}" Height="140" Background="#202429" BorderBrush="#333"/>
-                    <ListBox Grid.Row="1" Grid.Column="2" ItemsSource="{Binding Inventory}" Height="140" Background="#202429" BorderBrush="#333"/>
-                </Grid>
-
-                <GroupBox Header="Spells" Margin="0,0,0,12">
-                    <DataGrid ItemsSource="{Binding Spells}" AutoGenerateColumns="False" CanUserAddRows="False" CanUserDeleteRows="False" IsReadOnly="True" RowHeaderWidth="0" FontSize="12" HeadersVisibility="Column" Background="{StaticResource Brush.Panel}" Foreground="{StaticResource Brush.Text}" BorderBrush="{StaticResource Brush.Border}" RowBackground="#262626" AlternatingRowBackground="#303030" MinHeight="240" Height="Auto">
-                        <DataGrid.Columns>
-                            <DataGridTextColumn Header="Nick" Binding="{Binding Nick}" Width="80"/>
-                            <DataGridTextColumn Header="Name" Binding="{Binding LongName}" Width="*"/>
-                            <DataGridTextColumn Header="Sphere" Binding="{Binding Sphere}" Width="100"/>
-                            <DataGridTextColumn Header="Mana" Binding="{Binding Mana}" Width="70"/>
-                            <DataGridTextColumn Header="Diff" Binding="{Binding Diff}" Width="70"/>
-                        </DataGrid.Columns>
-                    </DataGrid>
-                </GroupBox>
-
-                <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,0,0,8">
-                    <Button Content="Close" Command="{Binding CloseCommand}" Width="100"/>
+    <Grid Margin="12">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+        
+        <!-- Header -->
+        <Border Grid.Row="0" Background="{StaticResource Brush.Panel}" BorderBrush="{StaticResource Brush.Border}" 
+                BorderThickness="1" CornerRadius="4" Padding="12,8" Margin="0,0,0,12">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <StackPanel>
+                    <TextBlock Text="{Binding Name}" FontSize="18" FontWeight="Bold"/>
+                    <TextBlock Text="{Binding Class}" FontSize="13" Foreground="{StaticResource Brush.TextMuted}"/>
                 </StackPanel>
+            </Grid>
+        </Border>
+        
+        <!-- Scrollable Content -->
+        <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" Margin="0,0,0,12">
+            <StackPanel>
+                <!-- Automation Settings -->
+                <Border Background="{StaticResource Brush.Panel}" BorderBrush="{StaticResource Brush.Border}" 
+                        BorderThickness="1" CornerRadius="4" Padding="12" Margin="0,0,0,12">
+                    <StackPanel>
+                        <TextBlock Text="Automation Features" Style="{StaticResource SectionHeaderStyle}"/>
+                        
+                        <!-- Feature Toggles -->
+                        <UniformGrid Columns="3" Margin="0,0,0,12">
+                            <CheckBox Content="Auto Shield" IsChecked="{Binding AutoShield}" Margin="0,0,8,6"
+                                      ToolTip="Automatically casts shield spells when shield effect expires"/>
+                            <CheckBox Content="Auto Heal" IsChecked="{Binding AutoHeal}" Margin="0,0,8,6"
+                                      ToolTip="Automatically casts healing spells when HP drops below configured threshold"/>
+                            <CheckBox Content="Auto Gong" IsChecked="{Binding AutoGong}" Margin="0,0,0,6"
+                                      ToolTip="Rings gong when no AC/AT timers and no aggressive monsters present"/>
+                        </UniformGrid>
+                        <UniformGrid Columns="3" Margin="0,0,0,12">
+                            <CheckBox Content="Auto Attack" IsChecked="{Binding AutoAttack}" Margin="0,0,8,6"
+                                      ToolTip="Automatically attacks aggressive monsters"/>
+                            <CheckBox Content="Pickup Gold" IsChecked="{Binding PickupGold}" Margin="0,0,8,6"
+                                      ToolTip="Automatically picks up gold coins when they appear"/>
+                            <CheckBox Content="Pickup Silver" IsChecked="{Binding PickupSilver}" Margin="0,0,0,6"
+                                      ToolTip="Automatically picks up silver coins when they appear"/>
+                        </UniformGrid>
+                        
+                        <!-- Threshold Settings -->
+                        <TextBlock Text="Thresholds and Timers" FontSize="12" FontWeight="SemiBold" Margin="0,4,0,8"/>
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                            </Grid.RowDefinitions>
+                            
+                            <!-- Column 0 -->
+                            <TextBlock Grid.Row="0" Grid.Column="0" Text="Shield Refresh (sec)" Style="{StaticResource LabelStyle}"/>
+                            <TextBox Grid.Row="1" Grid.Column="0" Text="{Binding ShieldRefreshSec, UpdateSourceTrigger=PropertyChanged}" 
+                                     Width="120" HorizontalAlignment="Left" Margin="0,0,8,8"
+                                     Style="{StaticResource SelectAllOnFocusTextBox}" PreviewTextInput="NumericOnly" 
+                                     ToolTip="Minimum time between shield casting attempts"/>
+                            
+                            <TextBlock Grid.Row="2" Grid.Column="0" Text="Auto Heal HP %" Style="{StaticResource LabelStyle}"/>
+                            <TextBox Grid.Row="3" Grid.Column="0" Text="{Binding AutoHealHpPercent, UpdateSourceTrigger=PropertyChanged}" 
+                                     Width="120" HorizontalAlignment="Left" Margin="0,0,8,8"
+                                     Style="{StaticResource SelectAllOnFocusTextBox}" PreviewTextInput="NumericOnly" 
+                                     ToolTip="HP percentage threshold for automatic healing"/>
+                            
+                            <TextBlock Grid.Row="4" Grid.Column="0" Text="Critical HP %" Style="{StaticResource LabelStyle}"/>
+                            <TextBox Grid.Row="5" Grid.Column="0" Text="{Binding CriticalHpPercent, UpdateSourceTrigger=PropertyChanged}" 
+                                     Width="120" HorizontalAlignment="Left" Margin="0,0,8,0"
+                                     Style="{StaticResource SelectAllOnFocusTextBox}" PreviewTextInput="NumericOnly" 
+                                     ToolTip="Critical HP percentage for emergency actions"/>
+                            
+                            <!-- Column 1 -->
+                            <TextBlock Grid.Row="0" Grid.Column="1" Text="Gong Min HP %" Style="{StaticResource LabelStyle}"/>
+                            <TextBox Grid.Row="1" Grid.Column="1" Text="{Binding GongMinHpPercent, UpdateSourceTrigger=PropertyChanged}" 
+                                     Width="120" HorizontalAlignment="Left" Margin="0,0,8,8"
+                                     Style="{StaticResource SelectAllOnFocusTextBox}" PreviewTextInput="NumericOnly" 
+                                     ToolTip="Minimum HP percentage required to run Auto Gong/Auto Attack"/>
+                            
+                            <TextBlock Grid.Row="2" Grid.Column="1" Text="Warning Heal HP %" Style="{StaticResource LabelStyle}"/>
+                            <TextBox Grid.Row="3" Grid.Column="1" Text="{Binding WarningHealHpPercent, UpdateSourceTrigger=PropertyChanged}" 
+                                     Width="120" HorizontalAlignment="Left" Margin="0,0,8,8"
+                                     Style="{StaticResource SelectAllOnFocusTextBox}" PreviewTextInput="NumericOnly" 
+                                     ToolTip="HP percentage that stops automation and waits for timers before healing"/>
+                            
+                            <TextBlock Grid.Row="4" Grid.Column="1" Text="Critical Action" Style="{StaticResource LabelStyle}"/>
+                            <ComboBox Grid.Row="5" Grid.Column="1" SelectedItem="{Binding CriticalAction, UpdateSourceTrigger=PropertyChanged}" 
+                                      ItemsSource="{Binding CriticalActionOptions}"
+                                      Width="120" HorizontalAlignment="Left" Margin="0,0,8,0"
+                                      IsEditable="True" IsTextSearchEnabled="False"
+                                      ToolTip="Select or enter custom action: stop, disconnect, or script:your_command"/>
+                        </Grid>
+                    </StackPanel>
+                </Border>
+                
+                <!-- Inventory & Resources -->
+                <Border Background="{StaticResource Brush.Panel}" BorderBrush="{StaticResource Brush.Border}" 
+                        BorderThickness="1" CornerRadius="4" Padding="12" Margin="0,0,0,12">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+                        
+                        <!-- Heals -->
+                        <StackPanel Grid.Column="0" Margin="0,0,8,0">
+                            <TextBlock Style="{StaticResource SectionHeaderStyle}">
+                                <Run Text="+ Healing Spells"/>
+                            </TextBlock>
+                            <Border Background="#1a1d21" BorderBrush="#333" BorderThickness="1" CornerRadius="3" Padding="6">
+                                <ListBox ItemsSource="{Binding Heals}" Background="Transparent" BorderThickness="0" MaxHeight="180">
+                                    <ListBox.ItemTemplate>
+                                        <DataTemplate>
+                                            <Grid Margin="2">
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="Auto"/>
+                                                    <ColumnDefinition Width="*"/>
+                                                    <ColumnDefinition Width="Auto"/>
+                                                </Grid.ColumnDefinitions>
+                                                <TextBlock Grid.Column="0" Text="{Binding Short}" FontWeight="Bold" 
+                                                           Foreground="#5EC6FF" Margin="0,0,8,0" Width="40"/>
+                                                <TextBlock Grid.Column="1" Text="{Binding Spell}" TextTrimming="CharacterEllipsis"/>
+                                                <TextBlock Grid.Column="2" Margin="8,0,0,0">
+                                                    <Run Text="x" Foreground="{StaticResource Brush.TextMuted}"/>
+                                                    <Run Text="{Binding Heals}" FontWeight="SemiBold" Foreground="#4CAF50"/>
+                                                </TextBlock>
+                                            </Grid>
+                                        </DataTemplate>
+                                    </ListBox.ItemTemplate>
+                                </ListBox>
+                            </Border>
+                        </StackPanel>
+                        
+                        <!-- Shields -->
+                        <StackPanel Grid.Column="1" Margin="0,0,8,0">
+                            <TextBlock Text="Shield Spells" Style="{StaticResource SectionHeaderStyle}"/>
+                            <Border Background="#1a1d21" BorderBrush="#333" BorderThickness="1" CornerRadius="3" Padding="6">
+                                <ListBox ItemsSource="{Binding Shields}" Background="Transparent" BorderThickness="0" MaxHeight="180">
+                                    <ListBox.ItemTemplate>
+                                        <DataTemplate>
+                                            <TextBlock Text="{Binding}" Margin="2"/>
+                                        </DataTemplate>
+                                    </ListBox.ItemTemplate>
+                                </ListBox>
+                            </Border>
+                        </StackPanel>
+                        
+                        <!-- Inventory -->
+                        <StackPanel Grid.Column="2">
+                            <TextBlock Text="Inventory" Style="{StaticResource SectionHeaderStyle}"/>
+                            <Border Background="#1a1d21" BorderBrush="#333" BorderThickness="1" CornerRadius="3" Padding="6">
+                                <ListBox ItemsSource="{Binding Inventory}" Background="Transparent" BorderThickness="0" MaxHeight="180">
+                                    <ListBox.ItemTemplate>
+                                        <DataTemplate>
+                                            <TextBlock Text="{Binding}" Margin="2"/>
+                                        </DataTemplate>
+                                    </ListBox.ItemTemplate>
+                                </ListBox>
+                            </Border>
+                        </StackPanel>
+                    </Grid>
+                </Border>
+
+                <!-- Spells Table -->
+                <Border Background="{StaticResource Brush.Panel}" BorderBrush="{StaticResource Brush.Border}" 
+                        BorderThickness="1" CornerRadius="4" Padding="12">
+                    <StackPanel>
+                        <TextBlock Text="Spell Book" Style="{StaticResource SectionHeaderStyle}"/>
+                        <DataGrid ItemsSource="{Binding Spells}" AutoGenerateColumns="False" 
+                                  CanUserAddRows="False" CanUserDeleteRows="False" IsReadOnly="True" 
+                                  RowHeaderWidth="0" FontSize="11" HeadersVisibility="Column" 
+                                  Background="{StaticResource Brush.Panel}" Foreground="{StaticResource Brush.Text}" 
+                                  BorderBrush="{StaticResource Brush.Border}" RowBackground="#1a1d21" 
+                                  AlternatingRowBackground="#22252a" MinHeight="220" MaxHeight="300">
+                            <DataGrid.Columns>
+                                <DataGridTextColumn Header="Nick" Binding="{Binding Nick}" Width="70"/>
+                                <DataGridTextColumn Header="Spell Name" Binding="{Binding LongName}" Width="*"/>
+                                <DataGridTextColumn Header="Sphere" Binding="{Binding Sphere}" Width="100"/>
+                                <DataGridTextColumn Header="Mana" Binding="{Binding Mana}" Width="60"/>
+                                <DataGridTextColumn Header="Difficulty" Binding="{Binding Diff}" Width="75"/>
+                            </DataGrid.Columns>
+                        </DataGrid>
+                    </StackPanel>
+                </Border>
             </StackPanel>
         </ScrollViewer>
+
+        <!-- Footer Buttons -->
+        <Border Grid.Row="2" Background="{StaticResource Brush.Panel}" BorderBrush="{StaticResource Brush.Border}" 
+                BorderThickness="1,1,1,0" Padding="12,8">
+            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                <Button Content="Save and Close" Command="{Binding CloseCommand}" Width="120" Margin="0,0,8,0"/>
+                <Button Content="Cancel" Click="Cancel_Click" Width="100"/>
+            </StackPanel>
+        </Border>
     </Grid>
 </Window>

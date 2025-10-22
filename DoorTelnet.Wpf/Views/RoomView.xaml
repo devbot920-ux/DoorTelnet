@@ -1,197 +1,229 @@
 <UserControl x:Class="DoorTelnet.Wpf.Views.RoomView" xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" MinWidth="260" MinHeight="240">
-    <StackPanel>
-        <TextBlock Text="Room" FontWeight="Bold" FontSize="14" />
-        <TextBlock Text="{Binding RoomName}" FontWeight="SemiBold" TextWrapping="Wrap" Margin="0 2 0 6" />
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+        </Grid.RowDefinitions>
         
-        <!-- Room ID -->
-        <TextBlock Text="Room ID" FontWeight="Bold" FontSize="11" Margin="0 0 0 2" />
-        <TextBlock Text="{Binding RoomId}" FontSize="10" Foreground="#CCC" Margin="0 0 0 6" />
-
-        <TextBlock Text="Exits" FontWeight="Bold" />
-        <ItemsControl ItemsSource="{Binding Exits}" Margin="0 2 0 6">
-            <ItemsControl.ItemsPanel>
-                <ItemsPanelTemplate>
-                    <WrapPanel />
-                </ItemsPanelTemplate>
-            </ItemsControl.ItemsPanel>
-            <ItemsControl.ItemTemplate>
-                <DataTemplate>
-                    <Border Background="#2d2d2d" BorderBrush="#555" BorderThickness="1" CornerRadius="4" Padding="6,2" Margin="0 0 6 6">
-                        <TextBlock Text="{Binding}" FontSize="11" />
-                    </Border>
-                </DataTemplate>
-            </ItemsControl.ItemTemplate>
-        </ItemsControl>
-
-        <TextBlock Text="Monsters" FontWeight="Bold" />
-        <ItemsControl ItemsSource="{Binding Monsters}" Margin="0 2 0 8">
-            <ItemsControl.ItemTemplate>
-                <DataTemplate>
-                    <TextBlock Text="{Binding DisplayName}">
-                        <TextBlock.Style>
-                            <Style TargetType="TextBlock">
-                                <Setter Property="Foreground" Value="White" />
-                                <Style.Triggers>
-                                    <DataTrigger Binding="{Binding IsAggressive}" Value="True">
-                                        <Setter Property="Foreground" Value="#FFFF0000" />
-                                    </DataTrigger>
-                                    <DataTrigger Binding="{Binding TargetingYou}" Value="True">
-                                        <Setter Property="FontWeight" Value="Bold" />
-                                        <Setter Property="Foreground" Value="#FFFF0000" />
-                                    </DataTrigger>
-                                </Style.Triggers>
-                            </Style>
-                        </TextBlock.Style>
-                    </TextBlock>
-                </DataTemplate>
-            </ItemsControl.ItemTemplate>
-        </ItemsControl>
-
-        <TextBlock Text="Items" FontWeight="Bold" />
-        <ItemsControl ItemsSource="{Binding Items}" Margin="0 2 0 8">
-            <ItemsControl.ItemTemplate>
-                <DataTemplate>
-                    <TextBlock Text="{Binding}" />
-                </DataTemplate>
-            </ItemsControl.ItemTemplate>
-        </ItemsControl>
-
-        <!-- Navigation Section (moved to bottom) -->
-        <TextBlock Text="Navigation" FontWeight="Bold" Margin="0 8 0 2" />
-        <Grid Margin="0 2 0 6">
-            <Grid.RowDefinitions>
-                <RowDefinition Height="Auto"/>
-                <RowDefinition Height="Auto"/>
-                <RowDefinition Height="Auto"/>
-                <RowDefinition Height="Auto"/>
-                <RowDefinition Height="Auto"/>
-                <RowDefinition Height="Auto"/>
-            </Grid.RowDefinitions>
-            <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="*"/>
-                <ColumnDefinition Width="Auto"/>
-                <ColumnDefinition Width="Auto"/>
-            </Grid.ColumnDefinitions>
-            
-            <!-- Movement Mode Selector -->
-            <TextBlock Grid.Row="0" Grid.Column="0" Grid.ColumnSpan="3" 
-                       Text="Movement Mode:" FontWeight="SemiBold" FontSize="10" 
-                       Margin="0 0 0 2" Foreground="#CCC"/>
-            
-            <ComboBox Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="3"
-                      ItemsSource="{Binding MovementModes}"
-                      SelectedItem="{Binding SelectedMovementMode}"
-                      FontSize="10" Margin="0 0 0 4"
-                      ToolTip="Select movement speed vs reliability">
-                <ComboBox.ItemTemplate>
-                    <DataTemplate>
-                        <StackPanel Orientation="Horizontal">
-                            <TextBlock Text="{Binding Icon}" FontSize="12" Margin="0 0 6 0" VerticalAlignment="Center"/>
-                            <StackPanel>
-                                <TextBlock Text="{Binding Name}" FontWeight="SemiBold" FontSize="10"/>
-                                <TextBlock Text="{Binding Description}" FontSize="9" Foreground="#888"/>
-                            </StackPanel>
-                        </StackPanel>
-                    </DataTemplate>
-                </ComboBox.ItemTemplate>
-            </ComboBox>
-            
-            <!-- Quick mode selection buttons -->
-            <StackPanel Grid.Row="2" Grid.Column="0" Grid.ColumnSpan="3" 
-                        Orientation="Horizontal" Margin="0 2 0 6">
-                <Button Content="? Ultra" 
-                        Command="{Binding SelectUltraFastModeCommand}"
-                        FontSize="8" Padding="4,1" Margin="0 0 2 0"
-                        ToolTip="Ultra-Fast: 50ms delays (paste-friendly)"
-                        Background="#4a148c" BorderBrush="#6a1b9a"/>
-                <Button Content="?? Fast" 
-                        Command="{Binding SelectFastModeCommand}"
-                        FontSize="8" Padding="4,1" Margin="0 0 2 0"
-                        ToolTip="Fast: 200ms delays (safe areas)"
-                        Background="#1565c0" BorderBrush="#1976d2"/>
-                <Button Content="??? Safe" 
-                        Command="{Binding SelectReliableModeCommand}"
-                        FontSize="8" Padding="4,1"
-                        ToolTip="Reliable: Wait for room detection"
-                        Background="#2e7d32" BorderBrush="#388e3c"/>
-            </StackPanel>
-            
-            <!-- Autocomplete Navigation ComboBox -->
-            <ComboBox Grid.Row="3" Grid.Column="0" 
-                      Text="{Binding NavigationDestination, UpdateSourceTrigger=PropertyChanged}" 
-                      ItemsSource="{Binding NavigationSuggestions}"
-                      SelectedItem="{Binding SelectedSuggestion}"
-                      IsDropDownOpen="{Binding IsDropDownOpen, Mode=TwoWay}"
-                      IsEditable="True"
-                      IsTextSearchEnabled="False"
-                      FontSize="11" Margin="0 0 4 2"
-                      ToolTip="Enter room name, room ID, or 'store' to find nearby stores"
-                      Loaded="ComboBox_Loaded">
-                <ComboBox.ItemTemplate>
-                    <DataTemplate>
-                        <Grid Margin="4,2">
-                            <Grid.RowDefinitions>
-                                <RowDefinition Height="Auto"/>
-                                <RowDefinition Height="Auto"/>
-                            </Grid.RowDefinitions>
-                            
-                            <!-- Main suggestion text -->
-                            <TextBlock Grid.Row="0" 
-                                       Text="{Binding DisplayText}" 
-                                       FontSize="11" 
-                                       FontWeight="SemiBold"
-                                       Foreground="{StaticResource Brush.Text}"/>
-                            
-                            <!-- Room ID subtitle -->
-                            <TextBlock Grid.Row="1" 
-                                       Text="{Binding RoomId, StringFormat='Room ID: {0}'}" 
-                                       FontSize="9" 
-                                       Foreground="{StaticResource Brush.TextMuted}" 
-                                       Margin="0,1,0,0"/>
+        <!-- Scrollable content -->
+        <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
+            <StackPanel>
+                <!-- Room Info Section -->
+                <Border Background="#1a1d21" BorderBrush="#333" BorderThickness="1" CornerRadius="3" Padding="8" Margin="0,0,0,8">
+                    <StackPanel>
+                        <TextBlock Text="Room" FontWeight="Bold" FontSize="12" Foreground="{StaticResource Brush.AccentLight}" Margin="0,0,0,4"/>
+                        <TextBlock Text="{Binding RoomName}" FontWeight="SemiBold" TextWrapping="Wrap" Margin="0,0,0,6" FontSize="11"/>
+                        
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0" Text="Room ID:" FontSize="9" Foreground="{StaticResource Brush.TextMuted}" Margin="0,0,6,0"/>
+                            <TextBlock Grid.Column="1" Text="{Binding RoomId}" FontSize="9" Foreground="#CCC"/>
                         </Grid>
-                    </DataTemplate>
-                </ComboBox.ItemTemplate>
-            </ComboBox>
-            
-            <!-- Navigate button -->
-            <Button Grid.Row="3" Grid.Column="1" 
-                    Content="Go" 
-                    Command="{Binding StartNavigationCommand}"
-                    FontSize="10" Padding="8,2" Margin="2 0"/>
-            
-            <!-- Stop button -->
-            <Button Grid.Row="3" Grid.Column="2" 
-                    Content="Stop" 
-                    Command="{Binding StopNavigationCommand}"
-                    FontSize="10" Padding="8,2" Margin="2 0 0 0"/>
-            
-            <!-- Quick actions row - Fixed spacing and layout -->
-            <StackPanel Grid.Row="4" Grid.Column="0" Grid.ColumnSpan="3" 
-                        Orientation="Horizontal" Margin="0 4 0 8">
-                <Button Content="Find Stores" 
-                        Command="{Binding FindStoresCommand}"
-                        FontSize="9" Padding="6,2" Margin="0 0 4 0"
-                        ToolTip="Find nearby stores within 40 moves"/>
-                <Button Content="Set Pending" 
-                        Command="{Binding SetPendingDestinationCommand}"
-                        FontSize="9" Padding="6,2"
-                        ToolTip="Navigate when safe"/>
-            </StackPanel>
-            
-            <!-- Status display - Moved to separate row with more top margin -->
-            <Border Grid.Row="5" Grid.Column="0" Grid.ColumnSpan="3"
-                    Background="#2a2a2a" BorderBrush="#444" BorderThickness="1" 
-                    CornerRadius="3" Padding="6,4" Margin="0 4 0 0">
-                <TextBlock Text="{Binding NavigationStatus}" 
-                           FontSize="10" Foreground="#AAA" 
-                           TextWrapping="Wrap"/>
-            </Border>
-        </Grid>
+                    </StackPanel>
+                </Border>
 
-        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0 8 0 0">
-            <TextBlock Text="Updated:" FontSize="10" Foreground="#888" />
-            <TextBlock Text=" " FontSize="10" />
-            <TextBlock Text="{Binding LastUpdated}" FontSize="10" Foreground="#888" />
-        </StackPanel>
-    </StackPanel>
+                <!-- Exits Section -->
+                <Border Background="#1a1d21" BorderBrush="#333" BorderThickness="1" CornerRadius="3" Padding="8" Margin="0,0,0,8">
+                    <StackPanel>
+                        <TextBlock Text="Exits" FontWeight="SemiBold" FontSize="11" Margin="0,0,0,4"/>
+                        <ItemsControl ItemsSource="{Binding Exits}">
+                            <ItemsControl.ItemsPanel>
+                                <ItemsPanelTemplate>
+                                    <WrapPanel />
+                                </ItemsPanelTemplate>
+                            </ItemsControl.ItemsPanel>
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <Border Background="#2d2d2d" BorderBrush="#555" BorderThickness="1" CornerRadius="3" Padding="8,3" Margin="0,0,4,4">
+                                        <TextBlock Text="{Binding}" FontSize="10" FontWeight="SemiBold"/>
+                                    </Border>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </StackPanel>
+                </Border>
+
+                <!-- Monsters Section -->
+                <Border Background="#1a1d21" BorderBrush="#333" BorderThickness="1" CornerRadius="3" Padding="8" Margin="0,0,0,8">
+                    <StackPanel>
+                        <TextBlock Text="Monsters" FontWeight="SemiBold" FontSize="11" Margin="0,0,0,4"/>
+                        <ItemsControl ItemsSource="{Binding Monsters}">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <Border Background="#252829" BorderBrush="#3a3a3a" BorderThickness="1" CornerRadius="2" Padding="6,3" Margin="0,0,0,3">
+                                        <TextBlock Text="{Binding DisplayName}" FontSize="10">
+                                            <TextBlock.Style>
+                                                <Style TargetType="TextBlock">
+                                                    <Setter Property="Foreground" Value="White" />
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding IsAggressive}" Value="True">
+                                                            <Setter Property="Foreground" Value="#FF5252" />
+                                                            <Setter Property="FontWeight" Value="SemiBold" />
+                                                        </DataTrigger>
+                                                        <DataTrigger Binding="{Binding TargetingYou}" Value="True">
+                                                            <Setter Property="FontWeight" Value="Bold" />
+                                                            <Setter Property="Foreground" Value="#FF1744" />
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </TextBlock.Style>
+                                        </TextBlock>
+                                    </Border>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                        <TextBlock Text="No monsters" FontSize="9" Foreground="{StaticResource Brush.TextMuted}" Margin="0,2,0,0">
+                            <TextBlock.Style>
+                                <Style TargetType="TextBlock">
+                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding Monsters.Count}" Value="0">
+                                            <Setter Property="Visibility" Value="Visible"/>
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </TextBlock.Style>
+                        </TextBlock>
+                    </StackPanel>
+                </Border>
+
+                <!-- Items Section -->
+                <Border Background="#1a1d21" BorderBrush="#333" BorderThickness="1" CornerRadius="3" Padding="8" Margin="0,0,0,8">
+                    <StackPanel>
+                        <TextBlock Text="Items" FontWeight="SemiBold" FontSize="11" Margin="0,0,0,4"/>
+                        <ItemsControl ItemsSource="{Binding Items}">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <TextBlock Text="{Binding}" FontSize="10" Margin="0,0,0,2" Foreground="#E0E0E0"/>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                        <TextBlock Text="No items" FontSize="9" Foreground="{StaticResource Brush.TextMuted}" Margin="0,2,0,0">
+                            <TextBlock.Style>
+                                <Style TargetType="TextBlock">
+                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding Items.Count}" Value="0">
+                                            <Setter Property="Visibility" Value="Visible"/>
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </TextBlock.Style>
+                        </TextBlock>
+                    </StackPanel>
+                </Border>
+
+                <!-- Navigation Section -->
+                <Border Background="#1a1d21" BorderBrush="#333" BorderThickness="1" CornerRadius="3" Padding="8" Margin="0,0,0,8">
+                    <StackPanel>
+                        <TextBlock Text="Navigation" FontWeight="SemiBold" FontSize="11" Margin="0,0,0,6"/>
+                        
+                        <!-- Movement Mode - using highlighted buttons instead of ComboBox -->
+                        <TextBlock Text="Movement Mode" FontSize="9" Foreground="{StaticResource Brush.TextMuted}" Margin="0,0,0,3"/>
+                        <UniformGrid Columns="3" Margin="0,0,0,8">
+                            <Button Content="Ultra" Command="{Binding SelectUltraFastModeCommand}"
+                                    FontSize="9" Padding="4,3" Margin="0,0,2,0"
+                                    ToolTip="Ultra-Fast: 50ms delays">
+                                <Button.Style>
+                                    <Style TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding SelectedMovementMode.Mode}" Value="UltraFast">
+                                                <Setter Property="Background" Value="{StaticResource Brush.Accent}"/>
+                                                <Setter Property="BorderBrush" Value="{StaticResource Brush.AccentLight}"/>
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </Button.Style>
+                            </Button>
+                            <Button Content="Fast" Command="{Binding SelectFastModeCommand}"
+                                    FontSize="9" Padding="4,3" Margin="2,0,2,0"
+                                    ToolTip="Fast: 200ms delays">
+                                <Button.Style>
+                                    <Style TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding SelectedMovementMode.Mode}" Value="FastWithFallback">
+                                                <Setter Property="Background" Value="{StaticResource Brush.Accent}"/>
+                                                <Setter Property="BorderBrush" Value="{StaticResource Brush.AccentLight}"/>
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </Button.Style>
+                            </Button>
+                            <Button Content="Safe" Command="{Binding SelectReliableModeCommand}"
+                                    FontSize="9" Padding="4,3" Margin="2,0,0,0"
+                                    ToolTip="Reliable: Wait for room detection">
+                                <Button.Style>
+                                    <Style TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding SelectedMovementMode.Mode}" Value="Triggered">
+                                                <Setter Property="Background" Value="{StaticResource Brush.Accent}"/>
+                                                <Setter Property="BorderBrush" Value="{StaticResource Brush.AccentLight}"/>
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </Button.Style>
+                            </Button>
+                        </UniformGrid>
+                        
+                        <!-- Destination -->
+                        <TextBlock Text="Destination" FontSize="9" Foreground="{StaticResource Brush.TextMuted}" Margin="0,0,0,3"/>
+                        <Grid Margin="0,0,0,6">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            
+                            <ComboBox Grid.Column="0" 
+                                      Text="{Binding NavigationDestination, UpdateSourceTrigger=PropertyChanged}" 
+                                      ItemsSource="{Binding NavigationSuggestions}"
+                                      SelectedItem="{Binding SelectedSuggestion}"
+                                      IsDropDownOpen="{Binding IsDropDownOpen, Mode=TwoWay}"
+                                      IsEditable="True"
+                                      IsTextSearchEnabled="False"
+                                      FontSize="10" Margin="0,0,4,0"
+                                      ToolTip="Enter room name or ID"
+                                      Loaded="ComboBox_Loaded">
+                                <ComboBox.ItemTemplate>
+                                    <DataTemplate>
+                                        <StackPanel Margin="2">
+                                            <TextBlock Text="{Binding DisplayText}" FontSize="10" FontWeight="SemiBold"/>
+                                            <TextBlock Text="{Binding RoomId, StringFormat='ID: {0}'}" FontSize="8" Foreground="{StaticResource Brush.TextMuted}"/>
+                                        </StackPanel>
+                                    </DataTemplate>
+                                </ComboBox.ItemTemplate>
+                            </ComboBox>
+                            
+                            <Button Grid.Column="1" Content="Go" Command="{Binding StartNavigationCommand}"
+                                    FontSize="9" Padding="8,3" Margin="0,0,2,0"/>
+                            <Button Grid.Column="2" Content="Stop" Command="{Binding StopNavigationCommand}"
+                                    FontSize="9" Padding="8,3"/>
+                        </Grid>
+                        
+                        <!-- Quick actions -->
+                        <UniformGrid Columns="2" Margin="0,0,0,6">
+                            <Button Content="Find Stores" Command="{Binding FindStoresCommand}"
+                                    FontSize="9" Padding="4,3" Margin="0,0,2,0"/>
+                            <Button Content="Set Pending" Command="{Binding SetPendingDestinationCommand}"
+                                    FontSize="9" Padding="4,3" Margin="2,0,0,0"/>
+                        </UniformGrid>
+                        
+                        <!-- Status -->
+                        <Border Background="#252829" BorderBrush="#3a3a3a" BorderThickness="1" CornerRadius="2" Padding="6,4">
+                            <TextBlock Text="{Binding NavigationStatus}" FontSize="9" Foreground="#AAA" TextWrapping="Wrap"/>
+                        </Border>
+                    </StackPanel>
+                </Border>
+
+                <!-- Updated timestamp -->
+                <TextBlock HorizontalAlignment="Right" FontSize="8" Foreground="#666" Margin="0,4,0,0">
+                    <Run Text="Updated:"/>
+                    <Run Text="{Binding LastUpdated, Mode=OneWay}"/>
+                </TextBlock>
+            </StackPanel>
+        </ScrollViewer>
+    </Grid>
 </UserControl>

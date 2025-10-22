@@ -52,4 +52,9 @@ public partial class CharacterSheetDialog : Window
         }
         else e.CancelCommand();
     }
+
+    private void Cancel_Click(object sender, RoutedEventArgs e)
+    {
+        Close();
+    }
 }

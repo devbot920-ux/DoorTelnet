@@ -5,7 +5,7 @@ using System.Windows.Input;
 using DoorTelnet.Wpf.ViewModels;
 using Microsoft.Extensions.DependencyInjection;
 using System.Collections.Specialized;
-using DoorTelnet.Core.Session; // NEW: Add for GameState enum
+using DoorTelnet.Core.Session;
 
 namespace DoorTelnet.Wpf;
 
@@ -22,25 +22,11 @@ public partial class MainWindow : Window
         {
             DataContext = app._host.Services.GetRequiredService<MainViewModel>();
             LogVm = app._host.Services.GetRequiredService<LogViewModel>();
-            
-            // Auto-scroll log to bottom when new entries are added
-            LogVm.Entries.CollectionChanged += LogEntries_CollectionChanged;
         }
         
         CommandBindings.Add(new CommandBinding(ApplicationCommands.Close, (_, _) => Close()));
         Activated += (_, _) => FocusTerminal();
         Loaded += (_, _) => FocusTerminal();
-    }
-
-    private void LogEntries_CollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
-    {
-    if (e.Action == NotifyCollectionChangedAction.Add)
-    {
-        Dispatcher.BeginInvoke(() => 
-        {
-            LogScrollViewer.ScrollToEnd();
-        }, System.Windows.Threading.DispatcherPriority.Background);
-    }
     }
 
     private void FocusTerminal()
@@ -109,5 +95,27 @@ public partial class MainWindow : Window
             button.ContextMenu.IsOpen = true;
         }
         FocusTerminal();
+    }
+    
+    private void Exit_Click(object sender, RoutedEventArgs e)
+    {
+        Close();
+    }
+    
+    private void About_Click(object sender, RoutedEventArgs e)
+    {
+        MessageBox.Show(
+            "DoorTelnet - Modern MUD Client\n\n" +
+            "A feature-rich telnet client for playing text-based MUD games.\n\n" +
+            "Features:\n" +
+            "• ANSI color terminal emulation\n" +
+            "• Real-time combat tracking\n" +
+            "• Intelligent room navigation\n" +
+            "• Character management\n" +
+            "• Automation features\n\n" +
+            "© 2024", 
+            "About DoorTelnet", 
+            MessageBoxButton.OK, 
+            MessageBoxImage.Information);
     }
 }
