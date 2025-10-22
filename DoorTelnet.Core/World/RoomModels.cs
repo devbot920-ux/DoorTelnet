@@ -1,13 +1,15 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
 using System.Text.RegularExpressions;
+using DoorTelnet.Core.Terminal;
 
 namespace DoorTelnet.Core.World;
 
 /// <summary>
 /// Streamlined RoomTracker that uses segmented components for better maintainability
+/// Enhanced with color-based parsing for improved accuracy
 /// </summary>
 public class RoomTracker
 {
@@ -16,16 +18,48 @@ public class RoomTracker
     private readonly Dictionary<string, Dictionary<string, string>> _edges = new();
     private string _currentRoomKey = string.Empty;
     private DateTime _lastRoomChange = DateTime.MinValue;
+    private DateTime _lastMovementCommand = DateTime.MinValue; // Track when we last moved
+    private string? _lastMovementDirection = null; // Track which direction we moved
+    private string? _previousRoomId = null; // Track the room we came from
     private readonly Dictionary<string, Dictionary<string, RoomState>> _adjacentRoomData = new();
     private readonly LineBuffer _lineBuffer = new();
     private const string LookBoundary = "You peer 1 room away";
     private DateTime _lastLookParsed = DateTime.MinValue;
 
+    // Movement command patterns
+    private static readonly Regex MovementCommandPattern = new(@"^\[Hp=.*?\]\s*[nsewud][e|w]?(?:\s|$)|^\[Hp=.*?\]\s*(north|south|east|west|northeast|northwest|southeast|southwest|up|down)(?:\s|$)", RegexOptions.IgnoreCase);
+    private static readonly Regex EnterKeyPattern = new(@"^\[Hp=.*?\]\s*$", RegexOptions.IgnoreCase); // Stats line followed by nothing (Enter key)
+    private static readonly Regex StatsPattern = new(
+        @"\[Hp=\d+/Mp=\d+/Mv=\d+(?:/At=\d+)?(?:/Ac=\d+)?\]",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
     // Optional CombatTracker integration for unified death handling
     public object? CombatTracker { get; set; }
+    
+    // Optional ScreenBuffer reference for color-based parsing
+    private ScreenBuffer? _screenBuffer;
 
     public RoomState? CurrentRoom { get; private set; }
+    
+    /// <summary>
+    /// Gets the ID of the room we were previously in (before the current room)
+    /// </summary>
+    public string? PreviousRoomId => _previousRoomId;
+    
     public event Action<RoomState>? RoomChanged;
+    
+    /// <summary>
+    /// Gets the last movement direction that was detected (if any)
+    /// </summary>
+    public string? LastMovementDirection => _lastMovementDirection;
+
+    /// <summary>
+    /// Set the ScreenBuffer reference for color-based parsing (optional but recommended)
+    /// </summary>
+    public void SetScreenBuffer(ScreenBuffer screenBuffer)
+    {
+        _screenBuffer = screenBuffer;
+    }
 
     // Restored helper methods used by CLI / other subsystems
     public IEnumerable<BufferedLine> GetUnprocessedLinesForStats() => 
@@ -39,6 +73,7 @@ public class RoomTracker
         foreach (var bl in _lineBuffer.GetUnprocessedLines(l => l.ProcessedForDynamicEvents))
         {
             var line = RoomTextProcessor.StripLeadingPartialStats(bl.Content).stripped;
+            line = StatsPattern.Replace(line, "").Trim();
             if (Regex.IsMatch(line, @"^(?:A|An)\s+(.+?)\s+is\s+summoned\s+for\s+combat!?\s*$", RegexOptions.IgnoreCase)) 
                 return true;
             if (Regex.IsMatch(line, @"^(?:A |An |The )?(.+?)\s+(enters|arrives)\s+", RegexOptions.IgnoreCase)) 
@@ -55,6 +90,42 @@ public class RoomTracker
         if (!string.IsNullOrEmpty(cleanedLine))
         {
             _lineBuffer.AddLine(cleanedLine);
+            
+            // Check for movement commands or Enter key
+            if (MovementCommandPattern.IsMatch(cleanedLine))
+            {
+                _lastMovementCommand = DateTime.UtcNow;
+                
+                // Try to extract the direction
+                var match = MovementCommandPattern.Match(cleanedLine);
+                if (match.Success)
+                {
+                    var dirGroup = match.Groups[1];
+                    if (dirGroup.Success && !string.IsNullOrWhiteSpace(dirGroup.Value))
+                    {
+                        _lastMovementDirection = NormalizeDirection(dirGroup.Value);
+                    }
+                    else
+                    {
+                        // Try to extract from the command itself (e.g., "n", "2s", "ne")
+                        var cmdText = cleanedLine.Replace("[Hp=", "").Split(']').LastOrDefault()?.Trim();
+                        if (!string.IsNullOrWhiteSpace(cmdText))
+                        {
+                            // Remove any leading numbers (e.g., "2s" -> "s")
+                            var dirPart = new string([.. cmdText.Where(char.IsLetter)]);
+                            _lastMovementDirection = NormalizeDirection(dirPart);
+                        }
+                    }
+                }
+                
+                System.Diagnostics.Debug.WriteLine($"🚶 MOVEMENT COMMAND DETECTED: '{cleanedLine}' -> Direction: {_lastMovementDirection ?? "unknown"}");
+            }
+            else if (EnterKeyPattern.IsMatch(cleanedLine))
+            {
+                _lastMovementCommand = DateTime.UtcNow;
+                _lastMovementDirection = null; // Enter key, not a directional move
+                System.Diagnostics.Debug.WriteLine($"⏎ ENTER KEY DETECTED: '{cleanedLine}'");
+            }
         }
     }
 
@@ -65,7 +136,7 @@ public class RoomTracker
 
         if (handledLook)
         {
-            System.Diagnostics.Debug.WriteLine("?? Skipping current room update due to look command processing");
+            System.Diagnostics.Debug.WriteLine("🔍 Skipping current room update due to look command processing");
             return anyUpdate;
         }
 
@@ -79,80 +150,275 @@ public class RoomTracker
         {
             if (TryHandleDynamicEvents(user, character)) anyUpdate = true;
             
-            var roomState = ParseRoomFromBuffer();
+            // Check if we should look for a room update
+            bool recentMovement = (DateTime.UtcNow - _lastMovementCommand).TotalMilliseconds < 2000;
+            
+            // TRY COLOR-BASED PARSING FIRST if ScreenBuffer is available
+            RoomState? roomState = null;
+            if (_screenBuffer != null && recentMovement)
+            {
+                try
+                {
+                    roomState = ParseRoomWithColor();
+                    if (roomState != null)
+                    {
+                        System.Diagnostics.Debug.WriteLine($"🎨 COLOR-BASED PARSING SUCCESS: Room='{roomState.Name}', Monsters={roomState.Monsters.Count}, Exits={roomState.Exits.Count}");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    System.Diagnostics.Debug.WriteLine($"❌ COLOR-BASED PARSING ERROR: {ex.Message}");
+                    // Fall through to text-based parsing
+                }
+            }
+            
+            // Fallback to text-based parsing if color parsing failed or unavailable
+            if (roomState == null && recentMovement)
+            {
+                roomState = ParseRoomFromBuffer();
+            }
+            
             if (roomState == null)
             {
+                // No room state parsed
+                if (recentMovement)
+                {
+                    // We moved but didn't detect a new room name
+                    // Check if exits changed or we're in darkness
+                    if (CurrentRoom != null && !string.IsNullOrEmpty(_lastMovementDirection))
+                    {
+                        // Try to find where we moved to in the graph
+                        var curKey = MakeKey(user, character, CurrentRoom.Name);
+                        if (_edges.TryGetValue(curKey, out var edgeDict) && 
+                            edgeDict.TryGetValue(_lastMovementDirection, out var targetKey))
+                        {
+                            // We know where we should have gone
+                            if (_rooms.TryGetValue(targetKey, out var targetRoom))
+                            {
+                                System.Diagnostics.Debug.WriteLine($"📍 ASSUMED MOVEMENT: {_lastMovementDirection} from '{CurrentRoom.Name}' to '{targetRoom.Name}' (no room name detected, using graph)");
+                                
+                                // Update to the target room, preserving monster info
+                                UpdateRoom(user, character, targetRoom);
+                                _lastRoomChange = DateTime.UtcNow;
+                                return true;
+                            }
+                        }
+                        
+                        System.Diagnostics.Debug.WriteLine($"⚠️ MOVEMENT WITHOUT NAME: Direction {_lastMovementDirection} from '{CurrentRoom.Name}' but no graph data");
+                    }
+                }
+                
                 if (QuickAugmentMonsters(user, character)) anyUpdate = true;
             }
             else
             {
-                if (!roomState.Name.Contains("(looked)"))
+                // We have a room state
+                // Only update room name if we recently moved or it's a significant change
+                bool shouldUpdateName = recentMovement || 
+                                       CurrentRoom == null || 
+                                       !CurrentRoom.Exits.SequenceEqual(roomState.Exits);
+                
+                if (!shouldUpdateName && CurrentRoom != null)
                 {
+                    // Don't update room name, but update monsters/items
+                    var monstersChanged = !MonstersEqual(CurrentRoom?.Monsters, roomState.Monsters);
+                    var itemsChanged = (CurrentRoom == null && roomState.Items.Count > 0)
+                                       || (CurrentRoom != null && !CurrentRoom.Items.SequenceEqual(roomState.Items));
+
+                    if (monstersChanged || itemsChanged)
+                    {
+                        // Preserve current room name AND RoomId
+                        roomState = new RoomState
+                        {
+                            Name = CurrentRoom.Name, // Keep existing name
+                            RoomId = CurrentRoom.RoomId, // Keep existing RoomId
+                            Exits = roomState.Exits,
+                            Monsters = roomState.Monsters,
+                            Items = roomState.Items,
+                            LastUpdated = DateTime.UtcNow
+                        };
+                        
+                        UpdateRoom(user, character, roomState);
+                        _lastRoomChange = DateTime.UtcNow;
+                        anyUpdate = true;
+                    }
+                }
+                else if (!roomState.Name.Contains("(looked)"))
+                {
+                    // CRITICAL: If we recently moved, ALWAYS update the room even if the name is the same
+                    // This handles cases where multiple rooms have the same short description
+                    // The movement direction and graph edges will help us determine which room we're actually in
                     var isNewRoom = CurrentRoom == null
                                     || CurrentRoom.Name != roomState.Name
-                                    || !CurrentRoom.Exits.SequenceEqual(roomState.Exits);
+                                    || !CurrentRoom.Exits.SequenceEqual(roomState.Exits)
+                                    || _lastMovementDirection != null;
                     var monstersChanged = !MonstersEqual(CurrentRoom?.Monsters, roomState.Monsters);
                     var itemsChanged = (CurrentRoom == null && roomState.Items.Count > 0)
                                        || (CurrentRoom != null && !CurrentRoom.Items.SequenceEqual(roomState.Items));
 
                     if (isNewRoom || monstersChanged || itemsChanged)
                     {
+                        // Don't preserve RoomId when moving to what appears to be a new room
+                        // Let the navigation service's room matching determine the correct ID
                         UpdateRoom(user, character, roomState);
                         _lastRoomChange = DateTime.UtcNow;
                         anyUpdate = true;
                     }
                 }
             }
-
-            if (!anyUpdate && CurrentRoom != null && (DateTime.UtcNow - CurrentRoom.LastUpdated).TotalMilliseconds > 200)
-            {
-                CurrentRoom.LastUpdated = DateTime.UtcNow;
-                try { RoomChanged?.Invoke(CurrentRoom); } catch { }
-                anyUpdate = true;
-            }
         }
 
         return anyUpdate;
     }
 
-    public bool UpdateMonsterDisposition(string monsterName, string newDisposition)
+    /// <summary>
+    /// Parse room using color information from ScreenBuffer (PRIMARY parsing method)
+    /// OPTIMIZED: After movement, only look at recent lines (last 10-15 lines after stats)
+    /// </summary>
+    private RoomState? ParseRoomWithColor()
     {
-        lock (_sync)
+        if (_screenBuffer == null) return null;
+
+        // Get snapshot of current screen buffer
+        var snapshot = _screenBuffer.Snapshot();
+        var rows = _screenBuffer.Rows;
+        var cols = _screenBuffer.Columns;
+
+        // Convert snapshot to colored lines
+        var coloredLines = RoomParser.SnapshotToColoredLines(snapshot, rows, cols);
+
+        if (coloredLines.Count == 0) return null;
+
+        // Find the LAST stats line to determine where room content starts
+        var statsIdx = new List<int>();
+        for (int i = 0; i < coloredLines.Count; i++)
         {
-            if (CurrentRoom?.Monsters == null || CurrentRoom.Monsters.Count == 0)
-                return false;
-
-            var existingMonster = CurrentRoom.Monsters.FirstOrDefault(m => 
-                string.Equals(m.Name, monsterName, StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(m.Name?.Replace(" (summoned)", ""), monsterName, StringComparison.OrdinalIgnoreCase));
-
-            if (existingMonster != null && !existingMonster.Disposition.Equals(newDisposition, StringComparison.OrdinalIgnoreCase))
+            if (coloredLines[i].DominantForegroundColor.HasValue)
             {
-                var updatedMonsters = CurrentRoom.Monsters.ToList();
-                updatedMonsters.Remove(existingMonster);
-                updatedMonsters.Add(new MonsterInfo(
-                    existingMonster.Name, 
-                    newDisposition, 
-                    existingMonster.TargetingYou, 
-                    existingMonster.Count));
-
-                CurrentRoom.Monsters.Clear();
-                CurrentRoom.Monsters.AddRange(updatedMonsters);
-                CurrentRoom.LastUpdated = DateTime.UtcNow;
-
-                try
-                {
-                    RoomChanged?.Invoke(CurrentRoom);
-                }
-                catch
-                {
-                }
-
-                return true;
+                coloredLines[i].Text = StatsPattern.Replace(coloredLines[i].Text, "").Trim();
             }
-
-            return false;
+            if (RoomParser.IsStatsLine(coloredLines[i].Text))
+            {
+                statsIdx.Add(i);
+            }
         }
+
+        List<ColoredLine> roomLines;
+        bool recentMovement = (DateTime.UtcNow - _lastMovementCommand).TotalMilliseconds < 2000;
+        
+        if (statsIdx.Count > 0)
+        {
+            var lastStatsIdx = statsIdx.Last();
+            if (!MovementCommandPattern.IsMatch(coloredLines[lastStatsIdx].Text) && statsIdx.Count > 1)
+            {
+                lastStatsIdx = statsIdx[statsIdx.Count - 2];
+            }
+            
+            // OPTIMIZATION: After a movement command, only look at the most recent lines (10-15 lines after stats)
+            // This prevents scanning the entire buffer and improves performance
+            if (recentMovement)
+            {
+                // Take only the next 15 lines after the last stats line
+                // This is enough for: room name (1 line) + monsters (1-3 lines) + items (0-2 lines) + exits (1 line)
+                const int maxLinesToScan = 15;
+                roomLines = [.. coloredLines.Skip(lastStatsIdx + 1).Take(maxLinesToScan)];
+                
+                System.Diagnostics.Debug.WriteLine($"🔎 OPTIMIZED SCAN: Looking at {roomLines.Count} lines after stats (recent movement)");
+                if (roomLines.Count > 1)
+                {
+                    System.Diagnostics.Debug.WriteLine($"OPTIMIZED SCAN: found more than one lines after stats");
+                }
+            }
+            else
+            {
+                // No recent movement, can scan more lines for updates to current room
+                roomLines = [.. coloredLines.Skip(lastStatsIdx + 1)];
+            }
+        }
+        else
+        {
+            // No stats line found, limit scan to last 20 lines
+            const int maxLinesToScan = 20;
+            roomLines = [.. coloredLines.TakeLast(maxLinesToScan)];
+            
+            if (recentMovement)
+            {
+                System.Diagnostics.Debug.WriteLine($"🔎 OPTIMIZED SCAN: No stats found, looking at last {roomLines.Count} lines");
+            }
+        }
+
+        if (roomLines.Count == 0) return null;
+
+        // Use color-based parsing on the limited set of lines
+        var state = RoomParser.ParseWithColor(roomLines);
+
+        if (state != null)
+        {
+            // CRITICAL: Preserve existing monster disposition information for current room refreshes
+            if (CurrentRoom != null 
+                && string.Equals(state.Name, CurrentRoom.Name, StringComparison.OrdinalIgnoreCase)
+                && string.IsNullOrEmpty(_lastMovementDirection))
+            {
+                var mergedMonsters = new List<MonsterInfo>();
+                foreach (var newMonster in state.Monsters)
+                {
+                    var existingMonster = CurrentRoom.Monsters.FirstOrDefault(m => 
+                        string.Equals(m.Name, newMonster.Name, StringComparison.OrdinalIgnoreCase) ||
+                        string.Equals(m.Name?.Replace(" (summoned)", ""), newMonster.Name, StringComparison.OrdinalIgnoreCase));
+                    
+                    if (existingMonster != null)
+                    {
+                        mergedMonsters.Add(new MonsterInfo(
+                            newMonster.Name, 
+                            existingMonster.Disposition,
+                            existingMonster.TargetingYou,
+                            newMonster.Count));
+                        
+                        System.Diagnostics.Debug.WriteLine($"🔄 COLOR-PARSE: Preserved {existingMonster.Disposition} disposition for '{newMonster.Name}'");
+                    }
+                    else
+                    {
+                        mergedMonsters.Add(newMonster);
+                    }
+                }
+                
+                // Preserve aggressive monsters that might have been missed
+                foreach (var currentMonster in CurrentRoom.Monsters)
+                {
+                    if (!mergedMonsters.Any(m => string.Equals(m.Name, currentMonster.Name, StringComparison.OrdinalIgnoreCase)) &&
+                        currentMonster.Disposition.Equals("aggressive", StringComparison.OrdinalIgnoreCase))
+                    {
+                        mergedMonsters.Add(currentMonster);
+                        System.Diagnostics.Debug.WriteLine($"🔄 COLOR-PARSE: Preserved missing aggressive monster '{currentMonster.Name}'");
+                    }
+                }
+                
+                // Preserve RoomId when updating existing room
+                state = new RoomState
+                {
+                    Name = state.Name,
+                    RoomId = CurrentRoom.RoomId, // Keep existing RoomId
+                    Exits = state.Exits,
+                    Items = state.Items,
+                    Monsters = mergedMonsters,
+                    LastUpdated = DateTime.UtcNow
+                };
+            }
+            else
+            {
+                state = new RoomState
+                {
+                    Name = state.Name,
+                    RoomId = null, 
+                    Exits = state.Exits,
+                    Items = state.Items,
+                    Monsters = state.Monsters,
+                    LastUpdated = DateTime.UtcNow
+                };
+            }
+        }
+
+        return state;
     }
 
     private bool QuickAugmentMonsters(string user, string character)
@@ -196,9 +462,10 @@ public class RoomTracker
         var newState = new RoomState
         {
             Name = CurrentRoom.Name,
-            Exits = CurrentRoom.Exits.ToList(),
+            RoomId = CurrentRoom.RoomId, // Preserve RoomId
+            Exits = [.. CurrentRoom.Exits],
             Monsters = updated,
-            Items = CurrentRoom.Items.ToList(),
+            Items = [.. CurrentRoom.Items],
             LastUpdated = DateTime.UtcNow
         };
 
@@ -309,6 +576,7 @@ public class RoomTracker
         {
             var original = bl.Content;
             var line = RoomTextProcessor.StripLeadingPartialStats(original).stripped;
+            line = StatsPattern.Replace(line, "").Trim();
 
             var mSummon = Regex.Match(line, @"^(?:A|An)\s+(.+?)\s+is\s+summoned\s+for\s+combat!?\s*$", RegexOptions.IgnoreCase);
             if (mSummon.Success)
@@ -388,8 +656,9 @@ public class RoomTracker
         var newState = new RoomState
         {
             Name = CurrentRoom.Name,
-            Exits = CurrentRoom.Exits.ToList(),
-            Items = CurrentRoom.Items.ToList(),
+            RoomId = CurrentRoom.RoomId, // Preserve RoomId
+            Exits = [.. CurrentRoom.Exits],
+            Items = [.. CurrentRoom.Items],
             Monsters = updated,
             LastUpdated = DateTime.UtcNow
         };
@@ -454,17 +723,47 @@ public class RoomTracker
 
         string roomContent;
         List<BufferedLine> toMark;
+        bool recentMovement = (DateTime.UtcNow - _lastMovementCommand).TotalMilliseconds < 2000;
 
         if (statsIdx.Count > 0)
         {
             var last = statsIdx.Last();
-            roomContent = string.Join('\n', lines.Skip(last + 1));
-            toMark = unprocessed.Skip(last + 1).ToList();
+            
+            // OPTIMIZATION: After a movement command, only look at recent lines after the last stats
+            // Take at most 15 lines after stats for room detection
+            if (recentMovement)
+            {
+                const int maxLinesToScan = 15;
+                var linesToScan = lines.Skip(last + 1).Take(maxLinesToScan).ToList();
+                roomContent = string.Join('\n', linesToScan);
+                toMark = [.. unprocessed.Skip(last + 1).Take(maxLinesToScan)];
+                
+                System.Diagnostics.Debug.WriteLine($"🔎 TEXT-BASED OPTIMIZED SCAN: Looking at {linesToScan.Count} lines after stats (recent movement)");
+            }
+            else
+            {
+                // No recent movement, can scan all lines after stats
+                roomContent = string.Join('\n', lines.Skip(last + 1));
+                toMark = [.. unprocessed.Skip(last + 1)];
+            }
         }
         else
         {
-            roomContent = string.Join('\n', lines);
-            toMark = unprocessed;
+            // No stats found, limit to last 20 lines if recent movement
+            if (recentMovement)
+            {
+                const int maxLinesToScan = 20;
+                var linesToScan = lines.TakeLast(maxLinesToScan).ToList();
+                roomContent = string.Join('\n', linesToScan);
+                toMark = [.. unprocessed.TakeLast(maxLinesToScan)];
+                
+                System.Diagnostics.Debug.WriteLine($"🔎 TEXT-BASED OPTIMIZED SCAN: No stats found, looking at last {linesToScan.Count} lines");
+            }
+            else
+            {
+                roomContent = string.Join('\n', lines);
+                toMark = unprocessed;
+            }
         }
 
         if (string.IsNullOrWhiteSpace(roomContent)) return null;
@@ -490,7 +789,7 @@ public class RoomTracker
             {
                 var cleanedLines = lines.Where(l => l.IndexOf(LookBoundary, StringComparison.OrdinalIgnoreCase) < 0).ToList();
                 roomContent = string.Join('\n', cleanedLines);
-                toMark = toMark.Where(b => b.Content.IndexOf(LookBoundary, StringComparison.OrdinalIgnoreCase) < 0).ToList();
+                toMark = [.. toMark.Where(b => b.Content.IndexOf(LookBoundary, StringComparison.OrdinalIgnoreCase) < 0)];
             }
         }
 
@@ -529,13 +828,13 @@ public class RoomTracker
                             existingMonster.TargetingYou, // Keep existing targeting status
                             newMonster.Count));
                         
-                        System.Diagnostics.Debug.WriteLine($"?? ROOM REFRESH: Preserved {existingMonster.Disposition} disposition for '{newMonster.Name}'");
+                        System.Diagnostics.Debug.WriteLine($"🔄 ROOM REFRESH: Preserved {existingMonster.Disposition} disposition for '{newMonster.Name}'");
                     }
                     else
                     {
                         // New monster not seen before, use default neutral disposition
                         mergedMonsters.Add(newMonster);
-                        System.Diagnostics.Debug.WriteLine($"?? ROOM REFRESH: New monster '{newMonster.Name}' added as neutral");
+                        System.Diagnostics.Debug.WriteLine($"➕ ROOM REFRESH: New monster '{newMonster.Name}' added as neutral");
                     }
                 }
                 
@@ -548,14 +847,15 @@ public class RoomTracker
                     {
                         // Keep aggressive monsters that might have been missed in parsing
                         mergedMonsters.Add(currentMonster);
-                        System.Diagnostics.Debug.WriteLine($"?? ROOM REFRESH: Preserved missing aggressive monster '{currentMonster.Name}'");
+                        System.Diagnostics.Debug.WriteLine($"🔄 ROOM REFRESH: Preserved missing aggressive monster '{currentMonster.Name}'");
                     }
                 }
                 
-                // Update the parsed room state with merged monster information
+                // Update the parsed room state with merged monster information AND preserve RoomId
                 state = new RoomState
                 {
                     Name = state.Name,
+                    RoomId = CurrentRoom.RoomId, // Preserve existing RoomId
                     Exits = state.Exits,
                     Items = state.Items,
                     Monsters = mergedMonsters,
@@ -653,7 +953,7 @@ public class RoomTracker
         // Build remote segment between boundary and movement (or end if no movement)
         var remoteLines = movementIdx > 0
             ? lines.Skip(boundaryIndex + 1).Take(movementIdx - (boundaryIndex + 1)).ToList()
-            : lines.Skip(boundaryIndex + 1).ToList();
+            : [.. lines.Skip(boundaryIndex + 1)];
 
         var remoteSegment = string.Join('\n', remoteLines);
         
@@ -688,7 +988,7 @@ public class RoomTracker
                             var existingMonster = existingRoom.Monsters.FirstOrDefault(m => 
                                 string.Equals(m.Name, newMonster.Name, StringComparison.OrdinalIgnoreCase) ||
                                 string.Equals(m.Name?.Replace(" (summoned)", ""), newMonster.Name, StringComparison.OrdinalIgnoreCase));
-                            
+                        
                             if (existingMonster != null)
                             {
                                 // Preserve the existing disposition and targeting info
@@ -697,8 +997,9 @@ public class RoomTracker
                                     existingMonster.Disposition, // Keep existing disposition (aggressive/neutral)
                                     existingMonster.TargetingYou, // Keep existing targeting status
                                     newMonster.Count));
-                                
-                                System.Diagnostics.Debug.WriteLine($"?? LOOK MERGE: Preserved {existingMonster.Disposition} disposition for '{newMonster.Name}'");
+                            
+
+                                System.Diagnostics.Debug.WriteLine($"🔄 LOOK MERGE: Preserved {existingMonster.Disposition} disposition for '{newMonster.Name}'");
                             }
                             else
                             {
@@ -722,14 +1023,15 @@ public class RoomTracker
                                     currentMonster.TargetingYou,
                                     currentMonster.Count));
                                 
-                                System.Diagnostics.Debug.WriteLine($"?? LOOK MERGE: Added missing aggressive monster '{currentMonster.Name}' to adjacent room");
+                                System.Diagnostics.Debug.WriteLine($"🔄 LOOK MERGE: Added missing aggressive monster '{currentMonster.Name}' to adjacent room");
                             }
                         }
                         
-                        // Update the parsed room with merged monster information
+                        // Update the parsed room with merged data
                         parsed = new RoomState
                         {
                             Name = parsed.Name,
+                            RoomId = existingRoom.RoomId, // Preserve existing RoomId from stored room data
                             Exits = parsed.Exits,
                             Items = parsed.Items,
                             Monsters = mergedMonsters,
@@ -805,6 +1107,17 @@ public class RoomTracker
             _rooms[key] = state;
             _currentRoomKey = key;
             prev = CurrentRoom;
+            
+            // CRITICAL: Store the previous room's ID before changing to the new room
+            // This ensures we always have context about where we came from
+            // ONLY update if this is actually a NEW room (not just a RoomId being set)
+            if (prev != null && !string.IsNullOrEmpty(prev.RoomId) && 
+                (prev.Name != state.Name || prev.RoomId != state.RoomId))
+            {
+                _previousRoomId = prev.RoomId;
+                System.Diagnostics.Debug.WriteLine($"📍 ROOM TRANSITION: {_previousRoomId} -> {state.RoomId ?? "unknown"} (direction: {_lastMovementDirection ?? "unknown"})");
+            }
+            
             CurrentRoom = state;
             if (!_edges.ContainsKey(key))
             {
@@ -814,14 +1127,26 @@ public class RoomTracker
 
         try
         {
-            if (prev == null
+            // CRITICAL FIX: Only fire RoomChanged if something ACTUALLY changed
+            // Don't fire just because RoomId was set - that's not a room change
+            // We have to fire if there is a movement command and a room was parsed.
+            // if we dont we will not detect duplicate room changes. Only check if we dont know the room though
+            bool actualChange = prev == null
                 || prev.Name != state.Name
                 || !prev.Exits.SequenceEqual(state.Exits)
                 || !MonstersEqual(prev.Monsters, state.Monsters)
-                || !prev.Items.SequenceEqual(state.Items))
+                || !prev.Items.SequenceEqual(state.Items)
+                || (_lastMovementDirection != null && string.IsNullOrEmpty(state.RoomId));
+       
+            
+            if (actualChange)
             {
+                System.Diagnostics.Debug.WriteLine($"🔔 FIRING RoomChanged: {prev?.Name ?? "null"} -> {state.Name}, RoomId: {prev?.RoomId ?? "null"} -> {state.RoomId ?? "null"}");
                 RoomChanged?.Invoke(state);
-            }
+                _lastMovementDirection = null;
+             }
+
+
         }
         catch
         {
@@ -889,7 +1214,7 @@ public class RoomTracker
             grid.Center = new GridRoomInfo
             {
                 Name = CurrentRoom.Name,
-                Exits = CurrentRoom.Exits.ToList(),
+                Exits = [.. CurrentRoom.Exits],
                 MonsterCount = CurrentRoom.Monsters.Count,
                 HasMonsters = CurrentRoom.Monsters.Count > 0,
                 HasAggressiveMonsters = CurrentRoom.Monsters.Any(m => m.Disposition == "aggressive"),
@@ -920,7 +1245,7 @@ public class RoomTracker
                     ? new GridRoomInfo
                     {
                         Name = adj.Name,
-                        Exits = adj.Exits.ToList(),
+                        Exits = [.. adj.Exits],
                         MonsterCount = adj.Monsters.Count,
                         HasMonsters = adj.Monsters.Count > 0,
                         HasAggressiveMonsters = adj.Monsters.Any(m => m.Disposition == "aggressive"),
@@ -989,5 +1314,45 @@ public class RoomTracker
             "north" or "south" or "east" or "west" or "northeast" or "northwest" or "southeast" or "southwest" or "up" or "down" => dir,
             _ => null
         };
+    }
+
+    public bool UpdateMonsterDisposition(string monsterName, string newDisposition)
+    {
+        lock (_sync)
+        {
+            if (CurrentRoom?.Monsters == null || CurrentRoom.Monsters.Count == 0)
+                return false;
+
+            var existingMonster = CurrentRoom.Monsters.FirstOrDefault(m => 
+                string.Equals(m.Name, monsterName, StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(m.Name?.Replace(" (summoned)", ""), monsterName, StringComparison.OrdinalIgnoreCase));
+
+            if (existingMonster != null && !existingMonster.Disposition.Equals(newDisposition, StringComparison.OrdinalIgnoreCase))
+            {
+                var updatedMonsters = CurrentRoom.Monsters.ToList();
+                updatedMonsters.Remove(existingMonster);
+                updatedMonsters.Add(new MonsterInfo(
+                    existingMonster.Name, 
+                    newDisposition, 
+                    existingMonster.TargetingYou, 
+                    existingMonster.Count));
+
+                CurrentRoom.Monsters.Clear();
+                CurrentRoom.Monsters.AddRange(updatedMonsters);
+                CurrentRoom.LastUpdated = DateTime.UtcNow;
+
+                try
+                {
+                    RoomChanged?.Invoke(CurrentRoom);
+                }
+                catch
+                {
+                }
+
+                return true;
+            }
+
+            return false;
+        }
     }
 }

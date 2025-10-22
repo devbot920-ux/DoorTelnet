@@ -57,7 +57,14 @@ public partial class App : Application
                 services.AddSingleton<RuleEngine>();
                 services.AddSingleton<ScriptEngine>();
                 services.AddSingleton<StatsTracker>();
-                services.AddSingleton<RoomTracker>();
+                services.AddSingleton<RoomTracker>(sp =>
+                {
+                    var roomTracker = new RoomTracker();
+                    // Wire up ScreenBuffer for color-based parsing
+                    var screenBuffer = sp.GetRequiredService<ScreenBuffer>();
+                    roomTracker.SetScreenBuffer(screenBuffer);
+                    return roomTracker;
+                });
                 services.AddSingleton<CombatTracker>(sp =>
                 {
                     var roomTracker = sp.GetRequiredService<RoomTracker>();
@@ -95,10 +102,16 @@ public partial class App : Application
                     var dumb = bool.TryParse(cfg["diagnostics:dumbMode"], out var dm) && dm;
                     var combatDebug = bool.TryParse(cfg["diagnostics:combatCleaning"], out var cd) && cd;
                     var roomDebug = bool.TryParse(cfg["diagnostics:roomCleaning"], out var rd) && rd;
+                    var colorLogging = bool.TryParse(cfg["diagnostics:colorLogging"], out var cl) && cl;
+                    var roomColorLogging = bool.TryParse(cfg["diagnostics:roomColorLogging"], out var rcl) && rcl;
                     
                     // Configure debug logging
                     DoorTelnet.Core.Combat.CombatLineParser.SetDebugLogging(combatDebug);
                     DoorTelnet.Core.World.RoomTextProcessor.SetDebugLogging(roomDebug);
+                    
+                    // Configure color logging
+                    DoorTelnet.Core.Terminal.AnsiParser.EnableColorLogging = colorLogging;
+                    DoorTelnet.Core.World.RoomParser.EnableColorLogging = roomColorLogging;
 
                     var roomTracker = sp.GetRequiredService<RoomTracker>();
                     var combatTracker = sp.GetRequiredService<CombatTracker>();
@@ -266,38 +279,129 @@ public partial class App : Application
                         }
 
                         // Inventory parsing from Encumbrance to Armed line: merge into CSV
+                        // NEW PATTERN: "Items" (green) + ":" (white), items (no color) with "," (green), ending in "." (green)
+                        // Items might wrap across lines
                         int encIdx = lines.FindIndex(l => l.StartsWith("Encumbrance:", StringComparison.OrdinalIgnoreCase));
                         int armedIdx = lines.FindIndex(l => l.StartsWith("You are armed with", StringComparison.OrdinalIgnoreCase));
+                        
                         if (encIdx >= 0 && armedIdx > encIdx)
                         {
-                            var rawLines = new List<string>();
+                            // Method 1: Look for "Items:" marker with color detection
+                            var itemsHeaderIdx = -1;
                             for (int i = encIdx + 1; i < armedIdx; i++)
                             {
-                                var raw = lines[i].Trim();
-                                if (string.IsNullOrWhiteSpace(raw)) continue;
-                                if (raw.Contains("[Hp=")) continue;
-                                if (Regex.IsMatch(raw, @"^[A-Z][a-z]+:")) continue;
-                                rawLines.Add(raw);
+                                if (lines[i].Trim().StartsWith("Items", StringComparison.OrdinalIgnoreCase))
+                                {
+                                    itemsHeaderIdx = i;
+                                    break;
+                                }
                             }
-                            if (rawLines.Count > 0)
+                            
+                            if (itemsHeaderIdx >= 0)
                             {
-                                var blob = string.Join(", ", rawLines);
-                                var items = blob.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-                                    .Where(s => s.Length > 1)
-                                    .Distinct(StringComparer.OrdinalIgnoreCase)
-                                    .ToList();
-                                if (items.Count > 0) profile.ReplaceInventory(items);
+                                // Parse items from after "Items:" until we hit the armed line or another section
+                                var rawLines = new List<string>();
+                                for (int i = itemsHeaderIdx; i < armedIdx; i++)
+                                {
+                                    var raw = lines[i].Trim();
+                                    if (string.IsNullOrWhiteSpace(raw)) continue;
+                                    if (raw.Contains("[Hp=")) continue;
+                                    if (i == itemsHeaderIdx)
+                                    {
+                                        // Remove "Items:" prefix
+                                        var colonIdx = raw.IndexOf(':');
+                                        if (colonIdx >= 0 && colonIdx < raw.Length - 1)
+                                        {
+                                            raw = raw.Substring(colonIdx + 1).Trim();
+                                        }
+                                        else
+                                        {
+                                            continue; // Just the header, no items on same line
+                                        }
+                                    }
+                                    if (!string.IsNullOrWhiteSpace(raw))
+                                    {
+                                        rawLines.Add(raw);
+                                    }
+                                }
+                                
+                                if (rawLines.Count > 0)
+                                {
+                                    // Join all lines and split by commas
+                                    var blob = string.Join(" ", rawLines);
+                                    
+                                    // Remove trailing period if present
+                                    blob = blob.TrimEnd('.', ' ');
+                                    
+                                    // Split by commas and clean up
+                                    var items = blob.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                                        .Where(s => s.Length > 1)
+                                        .Select(s => s.Trim())
+                                        .Distinct(StringComparer.OrdinalIgnoreCase)
+                                        .ToList();
+                                    
+                                    if (items.Count > 0) 
+                                    {
+                                        profile.ReplaceInventory(items);
+                                        System.Diagnostics.Debug.WriteLine($"📦 INVENTORY PARSED (Items: header): {items.Count} items found");
+                                    }
+                                }
+                            }
+                            else
+                            {
+                                // Fallback: Use old method for backwards compatibility
+                                var rawLines = new List<string>();
+                                for (int i = encIdx + 1; i < armedIdx; i++)
+                                {
+                                    var raw = lines[i].Trim();
+                                    if (string.IsNullOrWhiteSpace(raw)) continue;
+                                    if (raw.Contains("[Hp=")) continue;
+                                    if (Regex.IsMatch(raw, @"^[A-Z][a-z]+:")) continue;
+                                    rawLines.Add(raw);
+                                }
+                                if (rawLines.Count > 0)
+                                {
+                                    var blob = string.Join(", ", rawLines);
+                                    var items = blob.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                                        .Where(s => s.Length > 1)
+                                        .Distinct(StringComparer.OrdinalIgnoreCase)
+                                        .ToList();
+                                    if (items.Count > 0) 
+                                    {
+                                        profile.ReplaceInventory(items);
+                                        System.Diagnostics.Debug.WriteLine($"📦 INVENTORY PARSED (fallback): {items.Count} items found");
+                                    }
+                                }
                             }
                         }
 
-                        // Armed with parsing
+                        // Armed with parsing - "You are armed with a {item name}." (green)
                         var armedLine = lines.FirstOrDefault(l => l.StartsWith("You are armed with", StringComparison.OrdinalIgnoreCase));
                         if (!string.IsNullOrWhiteSpace(armedLine))
                         {
-                            var weapon = Regex.Replace(armedLine, @"^You are armed with\s*", "", RegexOptions.IgnoreCase).Trim();
-                            if (!string.IsNullOrWhiteSpace(weapon) && weapon != profile.Player.ArmedWith)
+                            // Extract the item name: "You are armed with a {name}."
+                            var match = Regex.Match(armedLine, @"^You are armed with\s+(?:a|an)\s+(.+?)\.?\s*$", RegexOptions.IgnoreCase);
+                            if (match.Success)
                             {
-                                profile.Player.ArmedWith = weapon; profile.SetIdentity(profile.Player.Name, profile.Player.Race, profile.Player.Walk, profile.Player.Class, profile.Player.Level);
+                                var weapon = match.Groups[1].Value.Trim();
+                                if (!string.IsNullOrWhiteSpace(weapon) && weapon != profile.Player.ArmedWith)
+                                {
+                                    profile.Player.ArmedWith = weapon; 
+                                    profile.SetIdentity(profile.Player.Name, profile.Player.Race, profile.Player.Walk, profile.Player.Class, profile.Player.Level);
+                                    System.Diagnostics.Debug.WriteLine($"⚔️ ARMED WITH: '{weapon}'");
+                                }
+                            }
+                            else
+                            {
+                                // Fallback to old method
+                                var weapon = Regex.Replace(armedLine, @"^You are armed with\s*", "", RegexOptions.IgnoreCase).Trim();
+                                weapon = weapon.TrimEnd('.', ' ');
+                                if (!string.IsNullOrWhiteSpace(weapon) && weapon != profile.Player.ArmedWith)
+                                {
+                                    profile.Player.ArmedWith = weapon; 
+                                    profile.SetIdentity(profile.Player.Name, profile.Player.Race, profile.Player.Walk, profile.Player.Class, profile.Player.Level);
+                                    System.Diagnostics.Debug.WriteLine($"⚔️ ARMED WITH (fallback): '{weapon}'");
+                                }
                             }
                         }
                         // Incarnations parsing integration
@@ -323,7 +427,6 @@ public partial class App : Application
                         }
                         PersistCharacterIfNew();
                     }
-
                     client.LineReceived += line =>
                     {
                         try

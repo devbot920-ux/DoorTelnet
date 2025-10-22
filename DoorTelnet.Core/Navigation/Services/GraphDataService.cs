@@ -127,8 +127,8 @@ public class GraphDataService
 
         lock (_sync)
         {
-            return _outgoingEdges.TryGetValue(roomId, out var edges) ? 
-                edges.ToList() : new List<GraphEdge>();
+            return _outgoingEdges.TryGetValue(roomId, out var edges) ?
+                [.. edges] : new List<GraphEdge>();
         }
     }
 
@@ -142,8 +142,8 @@ public class GraphDataService
 
         lock (_sync)
         {
-            return _incomingEdges.TryGetValue(roomId, out var edges) ? 
-                edges.ToList() : new List<GraphEdge>();
+            return _incomingEdges.TryGetValue(roomId, out var edges) ?
+                [.. edges] : new List<GraphEdge>();
         }
     }
 
@@ -168,10 +168,9 @@ public class GraphDataService
     {
         lock (_sync)
         {
-            return _nodes.Values
+            return [.. _nodes.Values
                 .Where(predicate)
-                .Take(maxResults)
-                .ToList();
+                .Take(maxResults)];
         }
     }
 

@@ -139,20 +139,40 @@ public class NavigationService
             if (!IsSafeToNavigate(out var safetyReason))
                 return NavigationResult.Failed($"Navigation safety check failed: {safetyReason}");
 
-            // Find current position in graph
-            var currentMatch = _roomMatching.FindMatchingNode(_roomTracker.CurrentRoom);
-            if (currentMatch == null || currentMatch.Confidence < 0.7)
-                return NavigationResult.Failed("Unable to determine current position in graph");
-
             lock (_sync)
             {
                 // Stop any existing navigation
                 StopNavigationInternal();
 
-                // Calculate path
+                // Get current room ID - try to use stored RoomId first, fall back to matching if needed
+                string? currentRoomId = _roomTracker.CurrentRoom.RoomId;
+                
+                if (string.IsNullOrEmpty(currentRoomId))
+                {
+                    // Need to match the room to find its ID
+                    _logger.LogDebug("Current room has no RoomId, performing room matching");
+                    var currentMatch = _roomMatching.FindMatchingNode(_roomTracker.CurrentRoom);
+                    
+                    if (currentMatch == null || currentMatch.Confidence < 0.7)
+                        return NavigationResult.Failed("Unable to determine current position in graph");
+                    
+                    currentRoomId = currentMatch.Node.Id;
+                    
+                    // Store the matched room ID for future use
+                    _roomTracker.CurrentRoom.RoomId = currentRoomId;
+                    
+                    _logger.LogInformation("Matched current room '{RoomName}' to graph node {NodeId} (confidence: {Confidence:P1})",
+                        _roomTracker.CurrentRoom.Name, currentRoomId, currentMatch.Confidence);
+                }
+                else
+                {
+                    _logger.LogDebug("Using stored RoomId {RoomId} for current position", currentRoomId);
+                }
+
+                // Calculate path using the current room ID
                 var request = new NavigationRequest
                 {
-                    FromRoomId = currentMatch.Node.Id,
+                    FromRoomId = currentRoomId,
                     ToRoomId = targetRoomId,
                     Constraints = constraints ?? CreateDefaultConstraints()
                 };
@@ -179,7 +199,7 @@ public class NavigationService
                 SetState(NavigationState.Navigating);
 
                 _logger.LogInformation("Started navigation from {From} to {To}, {Steps} steps",
-                    currentMatch.Node.Id, targetRoomId, path.StepCount);
+                    currentRoomId, targetRoomId, path.StepCount);
 
                 return NavigationResult.Success($"Navigation started: {path.StepCount} steps to destination");
             }
@@ -319,7 +339,7 @@ public class NavigationService
             });
         }
 
-        return suggestions.OrderBy(s => s.Distance).Take(maxResults).ToList();
+        return [.. suggestions.OrderBy(s => s.Distance).Take(maxResults)];
     }
 
     /// <summary>
@@ -330,12 +350,20 @@ public class NavigationService
         if (!_graphData.IsLoaded || _roomTracker.CurrentRoom == null)
             return new List<NavigationSuggestion>();
 
-        var currentMatch = _roomMatching.FindMatchingNode(_roomTracker.CurrentRoom);
-        if (currentMatch == null)
-            return new List<NavigationSuggestion>();
+        // Try to use the stored RoomId first
+        string? currentRoomId = _roomTracker.CurrentRoom.RoomId;
+        
+        if (string.IsNullOrEmpty(currentRoomId))
+        {
+            // Fall back to room matching if RoomId not available
+            var currentMatch = _roomMatching.FindMatchingNode(_roomTracker.CurrentRoom);
+            if (currentMatch == null)
+                return new List<NavigationSuggestion>();
+            
+            currentRoomId = currentMatch.Node.Id;
+        }
 
         var suggestions = new List<NavigationSuggestion>();
-        var currentRoomId = currentMatch.Node.Id;
 
         // Find all store rooms
         var storeRooms = _graphData.FindRooms(node =>
@@ -366,7 +394,7 @@ public class NavigationService
             }
         }
 
-        return suggestions.OrderBy(s => s.Distance).Take(maxResults).ToList();
+        return [.. suggestions.OrderBy(s => s.Distance).Take(maxResults)];
     }
 
     /// <summary>
@@ -408,7 +436,7 @@ public class NavigationService
         var nameMatches = SearchRooms(input, maxResults - suggestions.Count);
         suggestions.AddRange(nameMatches.Where(s => s.SuggestionType != NavigationSuggestionType.RoomId));
 
-        return suggestions.Take(maxResults).ToList();
+        return [.. suggestions.Take(maxResults)];
     }
 
     private int CalculateDistance(GraphNode targetRoom)
@@ -416,15 +444,24 @@ public class NavigationService
         if (_roomTracker.CurrentRoom == null)
             return int.MaxValue;
 
-        var currentMatch = _roomMatching.FindMatchingNode(_roomTracker.CurrentRoom);
-        if (currentMatch == null)
-            return int.MaxValue;
+        // Try to use the stored RoomId first
+        string? currentRoomId = _roomTracker.CurrentRoom.RoomId;
+        
+        if (string.IsNullOrEmpty(currentRoomId))
+        {
+            // Fall back to room matching if RoomId not available
+            var currentMatch = _roomMatching.FindMatchingNode(_roomTracker.CurrentRoom);
+            if (currentMatch == null)
+                return int.MaxValue;
+            
+            currentRoomId = currentMatch.Node.Id;
+        }
 
         try
         {
             // For distance calculation in suggestions, use absolute shortest path with no constraints
             // This gives users the true shortest distance, not filtered by safety constraints
-            var path = _pathfinding.FindAbsoluteShortestPath(currentMatch.Node.Id, targetRoom.Id);
+            var path = _pathfinding.FindAbsoluteShortestPath(currentRoomId, targetRoom.Id);
             return path.IsValid ? path.StepCount : int.MaxValue;
         }
         catch
@@ -463,6 +500,11 @@ public class NavigationService
     {
         lock (_sync)
         {
+            // only check for a room if an event has happened that indicates the room could be different
+            if (!string.IsNullOrEmpty(newRoom.RoomId))
+            {
+                return;
+            }
             // Clear room detection timeout - room change detected successfully
             _lastMovementCommandTime = DateTime.MinValue;
             _pendingMovementDirection = null;
@@ -473,12 +515,29 @@ public class NavigationService
                 // This ensures the room matching service has the correct context
                 UpdateRoomMatchingContext(newRoom);
 
-                // THEN: Use fast path room matching during navigation
-                var currentMatch = _roomMatching.FindMatchingNodeFast(newRoom);
-                
-                // Log simplified matching information for navigation
-                _logger.LogDebug("Navigation room change: Step {Step}, Room: '{RoomName}', Match: {MatchId} (confidence: {Confidence:P1}, type: {Type})",
-                    _currentStepIndex, newRoom.Name, currentMatch?.Node.Id ?? "none", currentMatch?.Confidence ?? 0.0, currentMatch?.MatchType ?? "none");
+                // THEN: Use fast path room matching during navigation (if RoomId not already set)
+                // Fast path checks expected room first for efficiency
+                if (string.IsNullOrEmpty(newRoom.RoomId))
+                {
+                    var currentMatch = _roomMatching.FindMatchingNodeFast(newRoom);
+                    
+                    // Log simplified matching information for navigation
+                    _logger.LogDebug("Navigation room change: Step {Step}, Room: '{RoomName}', Match: {MatchId} (confidence: {Confidence:P1}, type: {Type})",
+                        _currentStepIndex, newRoom.Name, currentMatch?.Node.Id ?? "none", currentMatch?.Confidence ?? 0.0, currentMatch?.MatchType ?? "none");
+                    
+                    // The FindMatchingNodeFast method already sets newRoom.RoomId if successful
+                    if (currentMatch == null || currentMatch.Confidence < 0.6)
+                    {
+                        _logger.LogWarning("Navigation uncertainty: low confidence room match {Confidence:P1} for '{RoomName}'", 
+                            currentMatch?.Confidence ?? 0.0, newRoom.Name);
+                        NavigationAlert?.Invoke($"Uncertain location during navigation");
+                    }
+                }
+                else
+                {
+                    _logger.LogDebug("Navigation room change: Step {Step}, Room: '{RoomName}' (using stored RoomId: {RoomId})",
+                        _currentStepIndex, newRoom.Name, newRoom.RoomId);
+                }
 
                 // NOW: Update step progress based on successful room change
                 _currentStepIndex++;
@@ -491,27 +550,60 @@ public class NavigationService
                     return;
                 }
 
-                // Simple validation: if we got a good match, we're probably on track
-                if (currentMatch != null && currentMatch.Confidence > 0.8)
+                // Validate we're on the correct path using RoomId
+                if (!string.IsNullOrEmpty(newRoom.RoomId))
                 {
-                    _logger.LogDebug("Navigation on track: room {RoomId} matched with high confidence", currentMatch.Node.Id);
-                }
-                else if (currentMatch != null && currentMatch.Confidence > 0.6)
-                {
-                    _logger.LogDebug("Navigation proceeding: room {RoomId} matched with acceptable confidence {Confidence:P1}", 
-                        currentMatch.Node.Id, currentMatch.Confidence);
-                }
-                else
-                {
-                    _logger.LogWarning("Navigation uncertainty: low confidence room match {Confidence:P1} for '{RoomName}'", 
-                        currentMatch?.Confidence ?? 0.0, newRoom.Name);
-                    NavigationAlert?.Invoke($"Uncertain location during navigation");
+                    var expectedStep = _currentPath.Steps[_currentStepIndex - 1]; // Just completed this step
+                    
+                    if (newRoom.RoomId == expectedStep.ToRoomId)
+                    {
+                        _logger.LogDebug("Navigation on track: arrived at expected room {RoomId}", newRoom.RoomId);
+                    }
+                    else
+                    {
+                        _logger.LogWarning("Navigation path deviation: expected room {Expected}, but at room {Actual}",
+                            expectedStep.ToRoomId, newRoom.RoomId);
+                        
+                        // CRITICAL: Path deviation detected - try to recover or stop navigation
+                        // Check if we can still reach the destination from here
+                        var recoveryPath = _pathfinding.FindAbsoluteShortestPath(newRoom.RoomId, _currentDestinationId!);
+                        if (recoveryPath.IsValid)
+                        {
+                            _logger.LogInformation("Path deviation detected, but can recover. Recalculating path from {CurrentRoom} to {Destination}",
+                                newRoom.RoomId, _currentDestinationId);
+                            NavigationAlert?.Invoke($"Navigation path deviation - recalculating route");
+                            
+                            // Recalculate path from current position
+                            _currentPath = recoveryPath;
+                            _currentStepIndex = 0;
+                            _movementQueue.StopExecution("Path recalculation");
+                            _movementQueue.QueueCommands(recoveryPath.Steps);
+                        }
+                        else
+                        {
+                            _logger.LogError("Path deviation with no recovery possible from {CurrentRoom} to {Destination}",
+                                newRoom.RoomId, _currentDestinationId);
+                            NavigationAlert?.Invoke($"Navigation path lost - stopping navigation");
+                            StopNavigationInternal();
+                        }
+                    }
                 }
             }
             else
             {
-                // Not navigating, but still update context for future matches
+                // Not navigating, but still update context and ensure room matching for future navigation
                 UpdateRoomMatchingContext(newRoom);
+                
+                // Ensure the RoomId is set for non-navigation room changes
+                if (string.IsNullOrEmpty(newRoom.RoomId))
+                {
+                    var match = _roomMatching.FindMatchingNode(newRoom);
+                    if (match != null)
+                    {
+                        _logger.LogDebug("Room matched: '{RoomName}' -> {RoomId} (confidence: {Confidence:P1})",
+                            newRoom.Name, newRoom.RoomId, match.Confidence);
+                    }
+                }
             }
         }
     }
@@ -747,6 +839,19 @@ public class NavigationService
                     }
                     
                     _logger.LogDebug("Navigation complete: expecting final destination {Destination}", expectedRoomId);
+                }
+            }
+            else
+            {
+                // Not navigating - use RoomTracker's tracked previous room and movement direction
+                // This is the CORRECT approach: RoomTracker maintains the actual room transition history
+                previousRoomId = _roomTracker.PreviousRoomId;
+                lastDirection = _roomTracker.LastMovementDirection;
+                
+                if (!string.IsNullOrEmpty(previousRoomId) && !string.IsNullOrEmpty(lastDirection))
+                {
+                    _logger.LogDebug("Using RoomTracker context: moved {Direction} from {PreviousRoom} to {CurrentRoom}", 
+                        lastDirection, previousRoomId, newRoom.RoomId ?? "unknown");
                 }
             }
 

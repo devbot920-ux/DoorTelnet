@@ -83,6 +83,8 @@
                             </Style>
                         </ToggleButton.Style>
                     </ToggleButton>
+                    <Button Width="140" Margin="0,0,8,0" Content="Copy Buffer w/ Colors" Command="{Binding CopyBufferWithColorsCommand}" 
+                            ToolTip="Copy the terminal screen buffer with color code information for each line - useful for debugging color-based parsing" />
                     <Button x:Name="ConnectButton" Width="110" Content="{Binding ConnectButtonText}" Command="{Binding ToggleConnectionCommand}" Click="ConnectButton_Click" />
                 </StackPanel>
                 <Menu Background="{StaticResource Brush.Panel}" BorderThickness="0" ItemContainerStyle="{StaticResource DarkMenuItemStyle}">

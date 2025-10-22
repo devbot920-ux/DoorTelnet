@@ -21,7 +21,7 @@ public class ScreenBuffer
 
     private int _savedX, _savedY;
 
-    public CellAttribute CurrentAttribute { get; private set; } = CellAttribute.Default;
+    public CellAttribute CurrentAttribute { get; set; } = CellAttribute.Default;
 
     /// <summary>
     /// Enable enhanced cleaning for stats lines to prevent AC/AT timer artifacts
@@ -491,10 +491,139 @@ public class ScreenBuffer
     public struct CellAttribute
     {
         public static CellAttribute Default => new() { Fg = -1, Bg = -1, Bold = false, Underline = false, Inverse = false };
+        
+        // Basic color index (-1 = default, 0-15 = standard colors)
         public int Fg { get; set; }
         public int Bg { get; set; }
+        
+        // Extended color information (for 256-color palette or RGB)
+        // If these are set, they take priority over the basic Fg/Bg indices
+        public int? FgPalette256 { get; set; }  // 256-color palette index (0-255)
+        public int? BgPalette256 { get; set; }  // 256-color palette index (0-255)
+        
+        public (int r, int g, int b)? FgRgb { get; set; }  // True RGB color
+        public (int r, int g, int b)? BgRgb { get; set; }  // True RGB color
+        
         public bool Bold { get; set; }
         public bool Underline { get; set; }
         public bool Inverse { get; set; }
+        
+        /// <summary>
+        /// Get the display color index, preferring extended colors if available
+        /// </summary>
+        public int GetDisplayFg()
+        {
+            // If we have RGB, convert to approximate color
+            if (FgRgb.HasValue)
+            {
+                var (r, g, b) = FgRgb.Value;
+                return ApproxColorFromRgb(r, g, b);
+            }
+            
+            // If we have 256-palette, convert to basic color
+            if (FgPalette256.HasValue)
+            {
+                return ConvertPalette256ToBasic(FgPalette256.Value);
+            }
+            
+            return Fg;
+        }
+        
+        /// <summary>
+        /// Get the display background color index, preferring extended colors if available
+        /// </summary>
+        public int GetDisplayBg()
+        {
+            // If we have RGB, convert to approximate color
+            if (BgRgb.HasValue)
+            {
+                var (r, g, b) = BgRgb.Value;
+                return ApproxColorFromRgb(r, g, b);
+            }
+            
+            // If we have 256-palette, convert to basic color
+            if (BgPalette256.HasValue)
+            {
+                return ConvertPalette256ToBasic(BgPalette256.Value);
+            }
+            
+            return Bg;
+        }
+        
+        private static int ConvertPalette256ToBasic(int pal)
+        {
+            // 0-15: Standard 16 colors
+            if (pal < 16)
+                return pal % 16;
+            
+            // 16-231: 216-color cube (6x6x6)
+            if (pal < 232)
+            {
+                int index = pal - 16;
+                int b = index % 6;
+                int g = (index / 6) % 6;
+                int r = (index / 36) % 6;
+                
+                // Convert to RGB
+                int rVal = r * 51;  // 0, 51, 102, 153, 204, 255
+                int gVal = g * 51;
+                int bVal = b * 51;
+                
+                return ApproxColorFromRgb(rVal, gVal, bVal);
+            }
+            
+            // 232-255: Grayscale
+            int gray = 8 + (pal - 232) * 10;
+            if (gray < 64) return 0;  // Black
+            if (gray > 192) return 15; // Bright white
+            if (gray > 128) return 7;  // White
+            return 8;  // Bright black (gray)
+        }
+        
+        private static int ApproxColorFromRgb(int r, int g, int b)
+        {
+            // Enhanced color mapping to 16-color palette
+            
+            // Check for grayscale
+            int maxDiff = Math.Max(Math.Max(Math.Abs(r - g), Math.Abs(g - b)), Math.Abs(r - b));
+            if (maxDiff < 30)
+            {
+                // It's gray
+                int avg = (r + g + b) / 3;
+                if (avg < 32) return 0;   // Black
+                if (avg < 96) return 8;   // Bright black (dark gray)
+                if (avg < 160) return 7;  // White (light gray)
+                return 15;                // Bright white
+            }
+            
+            // Determine dominant color(s)
+            bool rDom = r > 100;
+            bool gDom = g > 100;
+            bool bDom = b > 100;
+            bool bright = r > 160 || g > 160 || b > 160;
+            
+            // Three-color combinations
+            if (rDom && gDom && bDom)
+                return bright ? 15 : 7;  // White
+            
+            // Two-color combinations
+            if (rDom && gDom && !bDom)
+                return bright ? 11 : 3;  // Yellow
+            if (rDom && !gDom && bDom)
+                return bright ? 13 : 5;  // Magenta
+            if (!rDom && gDom && bDom)
+                return bright ? 14 : 6;  // Cyan
+            
+            // Single color dominant
+            if (rDom && !gDom && !bDom)
+                return bright ? 9 : 1;   // Red
+            if (!rDom && gDom && !bDom)
+                return bright ? 10 : 2;  // Green
+            if (!rDom && !gDom && bDom)
+                return bright ? 12 : 4;  // Blue
+            
+            // Fallback
+            return 7;  // White
+        }
     }
 }

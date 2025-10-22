@@ -319,7 +319,7 @@ public class TelnetClient
             return false;
         }
 
-        var ros = new ReadOnlySequence<byte>(_iacPending.ToArray());
+        var ros = new ReadOnlySequence<byte>([.. _iacPending]);
         var resp = _negotiation.ProcessCommand(ros, out var consumed);
 
         if (consumed > 0)
@@ -392,10 +392,9 @@ public class TelnetClient
         {
             _diagPreviewCount++;
             var preview = new string(
-                payload
+                [.. payload
                     .Take(120)
-                    .Select(b => b >= 32 && b < 127 ? (char)b : '.')
-                    .ToArray()
+                    .Select(b => b >= 32 && b < 127 ? (char)b : '.')]
             );
             var hexPreview = string.Join(" ", payload.Take(40).Select(b => b.ToString("X2")));
             Diag($"Payload[{payload.Count}] Preview='{preview}' Hex=[{hexPreview}]");
@@ -403,7 +402,7 @@ public class TelnetClient
 
         if (_rawEcho)
         {
-            var echo = new string(payload.Select(b => b >= 32 && b < 127 ? (char)b : '.').ToArray());
+            var echo = new string([.. payload.Select(b => b >= 32 && b < 127 ? (char)b : '.')]);
             _logger.LogInformation("RAW:{echo}", echo);
         }
 
@@ -578,17 +577,34 @@ public class TelnetClient
     */
     /// <summary>
     /// Post-process line to remove unwanted content - simplified since AnsiParser handles ANSI sequences
+    /// IMPORTANT: Do NOT strip stats from lines that contain commands, as RoomTracker needs them for movement detection
     /// </summary>
     private string PostProcessLine(string line)
     {
         if (string.IsNullOrWhiteSpace(line)) return string.Empty;
 
-        // Enhanced stats block removal to handle timer artifacts
-        // Remove complete stats blocks
+        // CRITICAL: Check if this line looks like a stats line with a command
+        // Pattern: [Hp=...] followed by optional whitespace and a command
+        // Examples: "[Hp=1532/Mp=596/Mv=684] n", "[Hp=1532/Mp=596/Mv=684] 3s", "[Hp=1532/Mp=596/Mv=684]"
+        var statsWithCommandPattern = @"^\[Hp=\d+/Mp=\d+/Mv=\d+(?:/At=\d+)?(?:/Ac=\d+)?\]";
+        if (Regex.IsMatch(line, statsWithCommandPattern))
+        {
+            // This is a stats line - preserve it completely for RoomTracker.AddLine()
+            // RoomTracker needs to see patterns like "[Hp=...] n" for movement detection
+            if (_diagnostics)
+            {
+                Diag($"?? Preserving stats line for movement detection: '{line}'");
+            }
+            return line.Trim();
+        }
+
+        // For non-stats lines, do normal cleaning
+        var originalLine = line;
+        
+        // Remove complete stats blocks from the middle/end of lines (but we already handled stats-prefix lines above)
         line = Regex.Replace(line, @"\[Hp=\d+/Mp=\d+/Mv=\d+(?:/At=\d+)?(?:/Ac=\d+)?\]", "");
         
         // Remove partial stats fragments that can appear due to timer updates
-        // These occur when AT/AC timers update while new content is being processed
         line = Regex.Replace(line, @"\d+/Ac=\d+\]", "");  // Fragment like "3/Ac=3]"
         line = Regex.Replace(line, @"/At=\d+/Ac=\d+\]", "");  // Fragment like "/At=3/Ac=3]"
         line = Regex.Replace(line, @"/Ac=\d+\]", "");  // Fragment like "/Ac=3]"
@@ -597,12 +613,12 @@ public class TelnetClient
         // Clean up extra whitespace
         line = Regex.Replace(line, @"\s+", " ").Trim();
         
-        // Filter out lines that are just movement commands
+        // Filter out lines that are just movement commands (WITHOUT stats prefix - those were preserved above)
         if (Regex.IsMatch(line, @"^\d*[A-Za-z]*[nsewud]$", RegexOptions.IgnoreCase))
         {
             if (_diagnostics)
             {
-                Diag($"Filtered movement command: '{line}'");
+                Diag($"?? Filtered standalone movement command: '{line}'");
             }
             return string.Empty;
         }
@@ -612,7 +628,7 @@ public class TelnetClient
         {
             if (_diagnostics && line.Length > 0)
             {
-                Diag($"Filtered short line: '{line}'");
+                Diag($"?? Filtered short line: '{line}'");
             }
             return string.Empty;
         }
@@ -704,7 +720,7 @@ public class TelnetClient
         if (escBuffer.Count == 0) return;
 
         // Handle simple cases - for more complex sequences, let the main parser handle them
-        var seq = System.Text.Encoding.ASCII.GetString(escBuffer.ToArray());
+        var seq = System.Text.Encoding.ASCII.GetString([.. escBuffer]);
 
         // Just basic handling - most will be handled by the main ANSI parser
         switch (seq)

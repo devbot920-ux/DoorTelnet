@@ -92,7 +92,7 @@ public class CredentialStore
         catch
         {
             // fallback insecure key in memory only
-            _keyCache = Encoding.UTF8.GetBytes("DoorTelnetFallbackKeyDoorTelnetFallbackKey").Take(32).ToArray();
+            _keyCache = [.. Encoding.UTF8.GetBytes("DoorTelnetFallbackKeyDoorTelnetFallbackKey").Take(32)];
         }
     }
 

@@ -83,7 +83,7 @@ public partial class HotKeysViewModel : ViewModelBase
         {
             var settings = new HotKeySettings
             {
-                Bindings = HotKeys.ToList()
+                Bindings = [.. HotKeys]
             };
 
             var directory = Path.GetDirectoryName(HotKeysPath);

@@ -373,6 +373,16 @@ public class MovementQueueService
 
     private async Task WaitForTriggeredRoomDetection(MovementCommand command, CancellationToken cancellationToken)
     {
+        // Small delay to allow the room detection to process
+        await Task.Delay(50, cancellationToken);
+        
+        // Check if we've already arrived at the expected destination room
+        if (HasArrivedAtDestination(command))
+        {
+            _logger.LogDebug("Already arrived at destination room {ToRoomId} - proceeding immediately", command.ToRoomId ?? "unknown");
+            return;
+        }
+        
         lock (_sync)
         {
             _waitingForRoomChange = new TaskCompletionSource<bool>();
@@ -412,12 +422,14 @@ public class MovementQueueService
     {
         // Fast mode: minimal delay with room detection fallback
         var fastDelay = TimeSpan.FromMilliseconds(200);
-        var timeSinceLastRoomChange = DateTime.UtcNow - _lastRoomChangeTime;
         
-        if (timeSinceLastRoomChange < fastDelay)
+        // Small delay to allow room detection to process
+        await Task.Delay(50, cancellationToken);
+        
+        // Check if we've already arrived at the expected destination room
+        if (HasArrivedAtDestination(command))
         {
-            // Recent room change, proceed immediately
-            _logger.LogDebug("Recent room change detected - proceeding immediately");
+            _logger.LogDebug("Already arrived at destination room {ToRoomId} - proceeding immediately", command.ToRoomId ?? "unknown");
             return;
         }
         
@@ -452,6 +464,30 @@ public class MovementQueueService
                 _waitingForRoomChange = null;
             }
         }
+    }
+
+    /// <summary>
+    /// Checks if we've already arrived at the destination room for the given command
+    /// </summary>
+    private bool HasArrivedAtDestination(MovementCommand command)
+    {
+        // If we don't have a room tracker or expected destination, can't verify
+        if (_roomTracker?.CurrentRoom == null || string.IsNullOrEmpty(command.ToRoomId))
+        {
+            return false;
+        }
+
+        var currentRoom = _roomTracker.CurrentRoom;
+        
+        // Check if current room ID matches the expected destination
+        if (!string.IsNullOrEmpty(currentRoom.RoomId) && currentRoom.RoomId == command.ToRoomId)
+        {
+            _logger.LogDebug("Destination verification: Current room ID {CurrentRoomId} matches expected {ExpectedRoomId}", 
+                currentRoom.RoomId, command.ToRoomId);
+            return true;
+        }
+
+        return false;
     }
 
     private async Task WaitForUltraFastMovement(MovementCommand command, CancellationToken cancellationToken)

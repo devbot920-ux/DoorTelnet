@@ -438,7 +438,7 @@ public class CombatLineParser
             }
         }
 
-        return foundMonsters.Distinct().ToList();
+        return [.. foundMonsters.Distinct()];
     }
 
     /// <summary>

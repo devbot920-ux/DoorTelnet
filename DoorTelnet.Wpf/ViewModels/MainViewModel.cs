@@ -139,7 +139,8 @@ public partial class MainViewModel : ViewModelBase
         SendPasswordCommand = new RelayCommand(SendPassword, () => IsConnected && GetPreferredPassword() != null);
         QuickLoginCommand = new AsyncRelayCommand(QuickLoginAsync, () => IsConnected && GetPreferredUsername() != null && GetPreferredPassword() != null);
         SelectUserCommand = new RelayCommand<string>(u => { if (!string.IsNullOrWhiteSpace(u)) SelectedUser = u; });
-        ClearCharacterDataCommand = new RelayCommand(ClearAllCharacterData); // NEW: Initialize clear command
+        ClearCharacterDataCommand = new RelayCommand(ClearAllCharacterData);
+        CopyBufferWithColorsCommand = new RelayCommand(CopyBufferWithColors); // NEW: Initialize command
 
         SelectedUser = _userSelection.SelectedUser ?? (!string.IsNullOrWhiteSpace(_settingsService.Get().Connection.LastUsername) ? _settingsService.Get().Connection.LastUsername : _credentialStore.ListUsernames().FirstOrDefault());
         RebuildUserMenu();
@@ -187,7 +188,8 @@ public partial class MainViewModel : ViewModelBase
     public ICommand SendPasswordCommand { get; }
     public ICommand QuickLoginCommand { get; }
     public ICommand SelectUserCommand { get; }
-    public ICommand ClearCharacterDataCommand { get; } // NEW: Command to clear all character data
+    public ICommand ClearCharacterDataCommand { get; }
+    public ICommand CopyBufferWithColorsCommand { get; } // NEW: Command to copy buffer with colors
 
     private bool _isConnected;
     public bool IsConnected
@@ -634,6 +636,256 @@ public partial class MainViewModel : ViewModelBase
         catch (Exception ex)
         {
             _logger.LogError(ex, "Error clearing character data");
+        }
+    }
+
+    /// <summary>
+    /// Copies the screen buffer to clipboard with detailed color information for each line
+    /// This is useful for debugging color-based parsing issues
+    /// </summary>
+    private void CopyBufferWithColors()
+    {
+        try
+        {
+            // Get access to the screen buffer via TelnetClient
+            var screenBufferField = _client.GetType()
+                .GetField("_screen", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+            
+            var screenBuffer = screenBufferField?.GetValue(_client) as DoorTelnet.Core.Terminal.ScreenBuffer;
+            
+            if (screenBuffer == null)
+            {
+                _logger.LogWarning("Could not access screen buffer");
+                MessageBox.Show("Could not access screen buffer", "Error", MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
+            }
+
+            // Get snapshot with color information
+            var snapshot = screenBuffer.Snapshot();
+            var rows = screenBuffer.Rows;
+            var cols = screenBuffer.Columns;
+
+            var output = new System.Text.StringBuilder();
+            output.AppendLine("???????????????????????????????????????????????????????");
+            output.AppendLine($"SCREEN BUFFER WITH DETAILED COLOR INFORMATION");
+            output.AppendLine($"Captured: {DateTime.Now:yyyy-MM-dd HH:mm:ss}");
+            output.AppendLine($"Size: {cols} cols x {rows} rows");
+            output.AppendLine($"");
+            output.AppendLine($"COLOR DETECTION: Basic 16-color ANSI only (no RGB/256-palette detected)");
+            output.AppendLine($"If two things look different colors but show the same ANSI code,");
+            output.AppendLine($"it's likely a visual effect (font rendering, anti-aliasing, context).");
+            output.AppendLine("???????????????????????????????????????????????????????");
+            output.AppendLine();
+
+            // Color formatting helper
+            string FormatColor(DoorTelnet.Core.Terminal.ScreenBuffer.CellAttribute attr, bool isForeground)
+            {
+                var sb = new System.Text.StringBuilder();
+                
+                if (isForeground)
+                {
+                    // Check for RGB color first
+                    if (attr.FgRgb.HasValue)
+                    {
+                        var (r, g, b) = attr.FgRgb.Value;
+                        sb.Append($"RGB({r},{g},{b})");
+                        
+                        // Also show hex
+                        sb.Append($" [#{r:X2}{g:X2}{b:X2}]");
+                        
+                        // Show approximate basic color
+                        int basic = attr.GetDisplayFg();
+                        sb.Append($" ?{GetColorName(basic)}({basic})");
+                    }
+                    // Check for 256-palette color
+                    else if (attr.FgPalette256.HasValue)
+                    {
+                        int pal = attr.FgPalette256.Value;
+                        sb.Append($"Palette256[{pal}]");
+                        
+                        // Show approximate basic color
+                        int basic = attr.GetDisplayFg();
+                        sb.Append($" ?{GetColorName(basic)}({basic})");
+                    }
+                    // Basic color
+                    else
+                    {
+                        sb.Append($"{GetColorName(attr.Fg)}({attr.Fg})");
+                    }
+                }
+                else
+                {
+                    // Background color
+                    if (attr.BgRgb.HasValue)
+                    {
+                        var (r, g, b) = attr.BgRgb.Value;
+                        sb.Append($"RGB({r},{g},{b})");
+                        sb.Append($" [#{r:X2}{g:X2}{b:X2}]");
+                        int basic = attr.GetDisplayBg();
+                        sb.Append($" ?{GetColorName(basic)}({basic})");
+                    }
+                    else if (attr.BgPalette256.HasValue)
+                    {
+                        int pal = attr.BgPalette256.Value;
+                        sb.Append($"Palette256[{pal}]");
+                        int basic = attr.GetDisplayBg();
+                        sb.Append($" ?{GetColorName(basic)}({basic})");
+                    }
+                    else
+                    {
+                        sb.Append($"{GetColorName(attr.Bg)}({attr.Bg})");
+                    }
+                }
+                
+                return sb.ToString();
+            }
+
+            // Color name mapping for basic colors
+            string GetColorName(int colorCode)
+            {
+                return colorCode switch
+                {
+                    -1 => "Default",
+                    0 => "Black",
+                    1 => "Red",
+                    2 => "Green",
+                    3 => "Yellow",
+                    4 => "Blue",
+                    5 => "Magenta",
+                    6 => "Cyan",
+                    7 => "White",
+                    8 => "BrightBlack",
+                    9 => "BrightRed",
+                    10 => "BrightGreen",
+                    11 => "BrightYellow",
+                    12 => "BrightBlue",
+                    13 => "BrightMagenta",
+                    14 => "BrightCyan",
+                    15 => "BrightWhite",
+                    _ => $"Color{colorCode}"
+                };
+            }
+
+            // Process each line
+            for (int y = 0; y < rows; y++)
+            {
+                // Build line text
+                var lineText = new System.Text.StringBuilder();
+                for (int x = 0; x < cols; x++)
+                {
+                    lineText.Append(snapshot[y, x].ch);
+                }
+                
+                var cleanLine = lineText.ToString().TrimEnd();
+                
+                // Skip empty lines
+                if (string.IsNullOrWhiteSpace(cleanLine))
+                    continue;
+
+                output.AppendLine($"?????????????????????????????????????????????????????????");
+                output.AppendLine($"Line {y + 1}:");
+                output.AppendLine($"  Text: \"{cleanLine}\"");
+                output.AppendLine();
+
+                // Analyze color segments on this line
+                var segments = new System.Collections.Generic.List<(int startCol, int endCol, DoorTelnet.Core.Terminal.ScreenBuffer.CellAttribute attr, string text)>();
+                
+                DoorTelnet.Core.Terminal.ScreenBuffer.CellAttribute? currentAttr = null;
+                int segmentStart = 0;
+                var segmentText = new System.Text.StringBuilder();
+
+                for (int x = 0; x < cols; x++)
+                {
+                    var cell = snapshot[y, x];
+                    var ch = cell.ch;
+                    var attr = cell.attr;
+                    
+                    // Check if we need to start a new segment (compare all color fields)
+                    if (!currentAttr.HasValue ||
+                        attr.Fg != currentAttr.Value.Fg ||
+                        attr.Bg != currentAttr.Value.Bg ||
+                        attr.Bold != currentAttr.Value.Bold ||
+                        !Equals(attr.FgRgb, currentAttr.Value.FgRgb) ||
+                        !Equals(attr.BgRgb, currentAttr.Value.BgRgb) ||
+                        attr.FgPalette256 != currentAttr.Value.FgPalette256 ||
+                        attr.BgPalette256 != currentAttr.Value.BgPalette256)
+                    {
+                        // Save previous segment if it exists
+                        if (currentAttr.HasValue && segmentText.Length > 0)
+                        {
+                            segments.Add((segmentStart, x - 1, currentAttr.Value, segmentText.ToString()));
+                        }
+
+                        // Start new segment
+                        currentAttr = attr;
+                        segmentStart = x;
+                        segmentText.Clear();
+                    }
+
+                    segmentText.Append(ch);
+                }
+
+                // Save final segment
+                if (currentAttr.HasValue && segmentText.Length > 0)
+                {
+                    segments.Add((segmentStart, cols - 1, currentAttr.Value, segmentText.ToString()));
+                }
+
+                // Output color segments
+                output.AppendLine($"  Color Segments: {segments.Count}");
+                int segNum = 1;
+                foreach (var segment in segments)
+                {
+                    var trimmedText = segment.text.TrimEnd();
+                    if (string.IsNullOrEmpty(trimmedText))
+                        continue;
+
+                    output.AppendLine($"    [{segNum}] Cols {segment.startCol}-{segment.endCol}:");
+                    output.AppendLine($"        FG: {FormatColor(segment.attr, true)}");
+                    output.AppendLine($"        BG: {FormatColor(segment.attr, false)}");
+                    output.AppendLine($"        Bold: {segment.attr.Bold}");
+                    output.AppendLine($"        Text: \"{trimmedText}\"");
+                    segNum++;
+                }
+
+                // Calculate dominant color for the line (using display colors for grouping)
+                var colorGroups = segments
+                    .Select(s => (displayFg: s.attr.GetDisplayFg(), s.text.Length, origAttr: s.attr))
+                    .Where(s => s.displayFg >= 0 && s.displayFg != 7) // Exclude default and white
+                    .GroupBy(s => s.displayFg)
+                    .Select(g => new { 
+                        Color = g.Key, 
+                        Length = g.Sum(s => s.Length),
+                        FirstAttr = g.First().origAttr
+                    })
+                    .OrderByDescending(g => g.Length)
+                    .ToList();
+
+                if (colorGroups.Any())
+                {
+                    var dominant = colorGroups.First();
+                    output.AppendLine();
+                    output.AppendLine($"  Dominant Color: {FormatColor(dominant.FirstAttr, true)} - {dominant.Length} chars");
+                }
+
+                output.AppendLine();
+            }
+
+            output.AppendLine("???????????????????????????????????????????????????????");
+            output.AppendLine("END OF BUFFER");
+            output.AppendLine("???????????????????????????????????????????????????????");
+
+            // Copy to clipboard
+            Clipboard.SetText(output.ToString());
+            
+            _logger.LogInformation("Screen buffer with detailed colors copied to clipboard ({rows} lines processed)", rows);
+            MessageBox.Show($"Screen buffer with detailed color information copied to clipboard!\n\n{rows} lines processed\n\nIncludes RGB, 256-palette, and basic color data", 
+                "Buffer Copied", MessageBoxButton.OK, MessageBoxImage.Information);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error copying buffer with colors");
+            MessageBox.Show($"Error copying buffer: {ex.Message}", "Error", MessageBoxButton.OK, MessageBoxImage.Error);
         }
     }
 }

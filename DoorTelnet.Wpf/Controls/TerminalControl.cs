@@ -264,7 +264,7 @@ public class TerminalControl : Control
                 for (int c = 0; c < cols; c++) lineCells[c] = _snapshot[bufferRow.Value, c];
             }
             else if (scrollLine != null) lineCells = scrollLine;
-            else lineCells = Enumerable.Repeat((' ', ScreenBuffer.CellAttribute.Default), cols).ToArray();
+            else lineCells = [.. Enumerable.Repeat((' ', ScreenBuffer.CellAttribute.Default), cols)];
 
             double x = padX;
             int col = 0;
@@ -349,7 +349,7 @@ public class TerminalControl : Control
             Color.FromRgb(0,0,255), Color.FromRgb(255,0,255), Color.FromRgb(0,255,255), Color.FromRgb(255,255,255)
         };
         foreach (var c in colors) { var b = new SolidColorBrush(c); b.Freeze(); list.Add(b); }
-        return list.ToArray();
+        return [.. list];
     }
 
     private Brush GetForegroundBrush(int fg, bool bold, bool inverse, int bg)
@@ -580,7 +580,7 @@ public class TerminalControl : Control
         _renderScheduled = false;
         if (_buffer == null) return;
         _snapshot = _buffer.Snapshot();
-        _scrollbackCache = _buffer.GetScrollback().Select(l => l.ToArray()).ToList();
+        _scrollbackCache = [.. _buffer.GetScrollback().Select(l => l.ToArray())];
         if (_scrollOffset > _scrollbackCache.Count) _scrollOffset = _scrollbackCache.Count;
         UpdateScrollBar();
         InvalidateVisual();

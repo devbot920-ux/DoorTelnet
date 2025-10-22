@@ -1,10 +1,11 @@
-using System.Text;
+﻿using System.Text;
 
 namespace DoorTelnet.Core.Terminal;
 
 /// <summary>
 /// Minimal ANSI/VT100 parser handling a subset needed for BBS door games.
 /// Supports CSI cursor moves, erase functions, SGR (including bright colors), save/restore cursor.
+/// Enhanced with color logging for diagnostics.
 /// </summary>
 public class AnsiParser
 {
@@ -13,6 +14,12 @@ public class AnsiParser
     private readonly StringBuilder _csi = new();
 
     private readonly ScreenBuffer _buffer;
+    
+    // Color logging support
+    public static bool EnableColorLogging { get; set; } = false;
+    private static readonly StringBuilder _recentText = new();
+    private static int _colorChangeCount = 0;
+    private static string _lastColorDescription = ""; // Track the last color for follow-up logging
 
     public AnsiParser(ScreenBuffer buffer) => _buffer = buffer;
 
@@ -25,7 +32,14 @@ public class AnsiParser
             {
                 case State.Text:
                     if (ch == '\x1B') _state = State.Esc;
-                    else _buffer.PutChar(ch);
+                    else
+                    {
+                        _buffer.PutChar(ch);
+                        if (EnableColorLogging && ch >= 32 && ch <= 126)
+                        {
+                            _recentText.Append(ch);
+                        }
+                    }
                     break;
                 case State.Esc:
                     if (ch == '[') { _csi.Clear(); _state = State.Csi; }
@@ -130,6 +144,19 @@ public class AnsiParser
     private void ApplySgr(int[] codes)
     {
         if (codes.Length == 0) { _buffer.SetAttribute(0); return; }
+        
+        // COLOR LOGGING: Show what text was rendered with the PREVIOUS color, then start tracking the new color
+        if (EnableColorLogging)
+        {
+            var capturedText = GetRecentText();
+            if (!string.IsNullOrEmpty(_lastColorDescription) && !string.IsNullOrEmpty(capturedText))
+            {
+                System.Diagnostics.Debug.WriteLine($"   ↳ Rendered: '{capturedText}'");
+            }
+            _recentText.Clear();
+            LogColorChange(codes);
+        }
+        
         // Expand bright color codes to standard ones with a flag if desired.
         // For now map 90-97 to 30-37 + bold, 100-107 to 40-47 + bold.
         var expanded = new List<int>();
@@ -150,12 +177,24 @@ public class AnsiParser
                         int b = codes[++i];
                         // Map truecolor to nearest 8-color for now
                         int idx = Approx8Color(r, g, b);
+                        
+                        if (EnableColorLogging)
+                        {
+                            System.Diagnostics.Debug.WriteLine($"? TRUECOLOR: RGB({r},{g},{b}) ? Color {idx} | {(isFg ? "Foreground" : "Background")} | Text: '{GetRecentText()}'");
+                        }
+                        
                         expanded.Add(isFg ? (30 + idx) : (40 + idx));
                     }
                     else if (mode == 5 && i + 1 < codes.Length)
                     {
                         int pal = codes[++i];
                         int idx = Pal256ToBasic(pal);
+                        
+                        if (EnableColorLogging)
+                        {
+                            System.Diagnostics.Debug.WriteLine($"? PALETTE: Pal256[{pal}] ? Color {idx} | {(isFg ? "Foreground" : "Background")} | Text: '{GetRecentText()}'");
+                        }
+                        
                         expanded.Add(isFg ? (30 + idx) : (40 + idx));
                     }
                 }
@@ -173,7 +212,70 @@ public class AnsiParser
                 expanded.Add(1); expanded.Add(c - 60);
             }
         }
-        _buffer.SetAttribute(expanded.ToArray());
+        _buffer.SetAttribute([.. expanded]);
+    }
+
+    private static void LogColorChange(int[] codes)
+    {
+        _colorChangeCount++;
+        
+        // Build a human-readable description of the color change
+        var description = new StringBuilder();
+        description.Append($"⚡ COLOR #{_colorChangeCount}: SGR[{string.Join(";", codes)}] ");
+        
+        foreach (var code in codes)
+        {
+            if (code == 0)
+                description.Append("RESET ");
+            else if (code == 1)
+                description.Append("BOLD ");
+            else if (code >= 30 && code <= 37)
+                description.Append($"FG:{GetColorName(code - 30)} ");
+            else if (code >= 40 && code <= 47)
+                description.Append($"BG:{GetColorName(code - 40)} ");
+            else if (code >= 90 && code <= 97)
+                description.Append($"BRIGHT-FG:{GetColorName(code - 90)} ");
+            else if (code >= 100 && code <= 107)
+                description.Append($"BRIGHT-BG:{GetColorName(code - 100)} ");
+            else if (code == 38)
+                description.Append("FG:(extended) ");
+            else if (code == 48)
+                description.Append("BG:(extended) ");
+        }
+        
+        _lastColorDescription = description.ToString();
+        System.Diagnostics.Debug.WriteLine(_lastColorDescription);
+    }
+
+    private static string GetColorName(int colorIndex)
+    {
+        return colorIndex switch
+        {
+            0 => "Black",
+            1 => "Red",
+            2 => "Green",
+            3 => "Yellow",
+            4 => "Blue",
+            5 => "Magenta",
+            6 => "Cyan",
+            7 => "White",
+            _ => $"Unknown({colorIndex})"
+        };
+    }
+
+    private static string GetRecentText()
+    {
+        if (_recentText.Length == 0) return "";
+        
+        var text = _recentText.ToString();
+        // Don't clear here anymore - it's cleared in ApplySgr before logging
+        
+        // Trim and limit length for logging
+        text = text.Trim();
+        if (text.Length > 50)
+            text = text.Substring(0, 50) + "...";
+        
+        return text;
     }
 
     private static int Pal256ToBasic(int pal)
@@ -232,6 +334,6 @@ public class AnsiParser
             if (p.Length == 0) { list.Add(0); continue; }
             if (int.TryParse(p, out var v)) list.Add(v);
         }
-        return list.ToArray();
+        return [.. list];
     }
 }

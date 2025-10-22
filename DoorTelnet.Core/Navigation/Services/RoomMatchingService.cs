@@ -51,6 +51,17 @@ public class EnhancedRoomMatchResult : RoomMatchResult
 }
 
 /// <summary>
+/// Metadata about a cached room match to determine cacheability
+/// </summary>
+internal class CachedRoomMatch
+{
+    public RoomMatchResult MatchResult { get; set; } = null!;
+    public int DuplicateRoomCount { get; set; }
+    public bool IsCacheable { get; set; }
+    public string ExitSignature { get; set; } = string.Empty;
+}
+
+/// <summary>
 /// Service for matching RoomTracker parsed rooms with graph nodes using enhanced contextual analysis
 /// </summary>
 public class RoomMatchingService
@@ -60,7 +71,7 @@ public class RoomMatchingService
 
     // Use ConcurrentDictionary instead of Dictionary + lock for thread safety
     private readonly ConcurrentDictionary<string, string> _nameToIdCache = new();
-    private readonly ConcurrentDictionary<string, RoomMatchResult> _recentMatches = new();
+    private readonly ConcurrentDictionary<string, CachedRoomMatch> _recentMatches = new();
     private const int MaxRecentMatches = 100;
 
     // Navigation context tracking
@@ -97,15 +108,30 @@ public class RoomMatchingService
         try
         {
             var roomName = roomState.Name.Trim();
+            var exitSignature = GenerateExitSignature(roomState.Exits);
 
-            // Check recent matches cache first - no lock needed with ConcurrentDictionary
-            var cacheKey = $"{roomName}|{_currentContext.PreviousRoomId}|{_currentContext.LastDirection}";
-            if (_recentMatches.TryGetValue(cacheKey, out var cached))
+            // Check recent matches cache first - but only use if it's cacheable
+            var cacheKey = $"{roomName}|{exitSignature}|{_currentContext.PreviousRoomId}|{_currentContext.LastDirection}";
+            if (_recentMatches.TryGetValue(cacheKey, out var cached)&& _currentContext.LastDirection == null)
             {
-                if (DateTime.UtcNow - cached.MatchedAt < TimeSpan.FromMinutes(2)) // Shorter cache for contextual matches
+                if (DateTime.UtcNow - cached.MatchResult.MatchedAt < TimeSpan.FromMinutes(2) ) // Shorter cache for contextual matches
                 {
-                    _logger.LogDebug("Using cached contextual match for room: {RoomName}", roomName);
-                    return cached;
+                    // Only use cache if the room was cacheable (not a hallway/duplicate)
+                    if (cached.IsCacheable)
+                    {
+                        _logger.LogDebug("Using cached match for unique room: {RoomName} (duplicates: {Count})", 
+                            roomName, cached.DuplicateRoomCount);
+                        
+                        // Update the RoomState with the cached room ID
+                        roomState.RoomId = cached.MatchResult.Node.Id;
+                        return cached.MatchResult;
+                    }
+                    else
+                    {
+                        _logger.LogDebug("Cache hit for ambiguous room '{RoomName}' (duplicates: {Count}) - re-matching with context", 
+                            roomName, cached.DuplicateRoomCount);
+                        // Don't use cache - fall through to re-match
+                    }
                 }
                 else
                 {
@@ -118,12 +144,42 @@ public class RoomMatchingService
 
             if (matchResult != null)
             {
+                // CRITICAL: Update the RoomState with the matched graph node ID
+                roomState.RoomId = matchResult.Node.Id;
+                
+                // Analyze if this room is cacheable (not a duplicate/hallway)
+                var nameMatches = FindAllNameMatches(roomName);
+                var exitsMatchingRooms = nameMatches.Where(node => 
+                    GenerateExitSignature(GetNodeExits(node)) == exitSignature).ToList();
+                
+                var duplicateCount = exitsMatchingRooms.Count;
+                var isCacheable = duplicateCount == 1; // Only cache if there's exactly one room with this name+exit pattern
+                
+                if (!isCacheable)
+                {
+                    _logger.LogInformation("Room '{RoomName}' with exits [{Exits}] has {Count} duplicates - NOT caching (likely hallway/corridor)", 
+                        roomName, exitSignature, duplicateCount);
+                }
+                else
+                {
+                    _logger.LogDebug("Room '{RoomName}' is unique - caching for future lookups", roomName);
+                }
+                
+                // Store the match with cacheability metadata
+                var cachedMatch = new CachedRoomMatch
+                {
+                    MatchResult = matchResult,
+                    DuplicateRoomCount = duplicateCount,
+                    IsCacheable = isCacheable,
+                    ExitSignature = exitSignature
+                };
+                
                 // Cache the match - handle cache size management
                 if (_recentMatches.Count >= MaxRecentMatches)
                 {
                     // Remove some old entries (simple cleanup)
                     var expiredKeys = _recentMatches
-                        .Where(kvp => DateTime.UtcNow - kvp.Value.MatchedAt > TimeSpan.FromMinutes(1))
+                        .Where(kvp => DateTime.UtcNow - kvp.Value.MatchResult.MatchedAt > TimeSpan.FromMinutes(1))
                         .Take(10)
                         .Select(kvp => kvp.Key)
                         .ToList();
@@ -134,13 +190,13 @@ public class RoomMatchingService
                     }
                 }
                 
-                _recentMatches.TryAdd(cacheKey, matchResult);
+                _recentMatches.TryAdd(cacheKey, cachedMatch);
 
                 // Update visit history
                 _roomVisitHistory.TryAdd(matchResult.Node.Id, DateTime.UtcNow);
 
-                _logger.LogInformation("Enhanced match: '{RoomName}' ? {NodeId} (confidence: {Confidence:P1}, type: {Type})",
-                    roomName, matchResult.Node.Id, matchResult.Confidence, matchResult.MatchType);
+                _logger.LogInformation("Enhanced match: '{RoomName}' -> {NodeId} (confidence: {Confidence:P1}, type: {Type}, cacheable: {Cacheable})",
+                    roomName, matchResult.Node.Id, matchResult.Confidence, matchResult.MatchType, isCacheable);
 
                 if (matchResult is EnhancedRoomMatchResult enhanced)
                 {
@@ -169,6 +225,30 @@ public class RoomMatchingService
     }
 
     /// <summary>
+    /// Generates a normalized exit signature for duplicate detection
+    /// </summary>
+    private string GenerateExitSignature(List<string> exits)
+    {
+        if (exits == null || exits.Count == 0)
+            return "none";
+        
+        // Normalize and sort exits to create a consistent signature
+        var normalized = exits.Select(NormalizeDirection).OrderBy(e => e);
+        return string.Join(",", normalized);
+    }
+
+    /// <summary>
+    /// Gets the list of exit directions for a graph node
+    /// </summary>
+    private List<string> GetNodeExits(GraphNode node)
+    {
+        return _graphData.GetOutgoingEdges(node.Id)
+            .Select(edge => NormalizeDirection(edge.Direction))
+            .Distinct()
+            .ToList();
+    }
+
+    /// <summary>
     /// Fast path room matching during navigation - checks expected room first
     /// </summary>
     public RoomMatchResult? FindMatchingNodeFast(RoomState roomState)
@@ -193,7 +273,39 @@ public class RoomMatchingService
                         _logger.LogDebug("Fast navigation match: expected room {ExpectedId} matches current room '{RoomName}'", 
                             _currentContext.ExpectedRoomId, roomName);
                         
+                        // Update the RoomState with the matched room ID
+                        roomState.RoomId = expectedNode.Id;
+                        
                         return new RoomMatchResult(expectedNode, 0.95, "Fast navigation match");
+                    }
+                }
+            }
+
+            // ENHANCED: If we have movement context, prioritize rooms in that direction
+            if (_currentContext.HasPreviousRoom && !string.IsNullOrEmpty(_currentContext.LastDirection))
+            {
+                // Get the edge from previous room in the movement direction
+                var previousRoomEdges = _graphData.GetOutgoingEdges(_currentContext.PreviousRoomId!);
+                var movementEdge = previousRoomEdges.FirstOrDefault(e => 
+                    NormalizeDirection(e.Direction) == NormalizeDirection(_currentContext.LastDirection!));
+
+                if (movementEdge != null)
+                {
+                    var targetNode = _graphData.GetNode(movementEdge.Target);
+                    if (targetNode != null)
+                    {
+                        // Check if this node matches the room name
+                        if (string.Equals(targetNode.Label, roomName, StringComparison.OrdinalIgnoreCase) ||
+                            string.Equals(targetNode.Sector, roomName, StringComparison.OrdinalIgnoreCase))
+                        {
+                            _logger.LogDebug("Movement direction match: moved {Direction} from {PreviousRoom} to {TargetRoom}", 
+                                _currentContext.LastDirection, _currentContext.PreviousRoomId, targetNode.Id);
+                            
+                            // Update the RoomState with the matched room ID
+                            roomState.RoomId = targetNode.Id;
+                            
+                            return new RoomMatchResult(targetNode, 0.90, "Movement direction match");
+                        }
                     }
                 }
             }
@@ -239,14 +351,43 @@ public class RoomMatchingService
         _logger.LogDebug("Found {Count} name matches for '{RoomName}', applying contextual analysis", 
             nameMatches.Count, roomName);
 
-        // 2. Apply contextual scoring to disambiguate multiple matches
+        // 2. PRIORITY FILTERING: If we have movement context, filter candidates by valid movement edges
+        if (_currentContext.HasPreviousRoom && !string.IsNullOrEmpty(_currentContext.LastDirection))
+        {
+            var previousRoomEdges = _graphData.GetOutgoingEdges(_currentContext.PreviousRoomId!);
+            var movementEdge = previousRoomEdges.FirstOrDefault(e => 
+                NormalizeDirection(e.Direction) == NormalizeDirection(_currentContext.LastDirection!));
+
+            if (movementEdge != null)
+            {
+                // Filter to only candidates reachable by the movement direction
+                var reachableCandidate = nameMatches.FirstOrDefault(n => n.Id == movementEdge.Target);
+                if (reachableCandidate != null)
+                {
+                    _logger.LogDebug("Movement validation: found reachable room {RoomId} via {Direction} from {PreviousRoom}", 
+                        reachableCandidate.Id, _currentContext.LastDirection, _currentContext.PreviousRoomId);
+                    
+                    // This is the most likely match - prioritize it heavily
+                    var enhanced = CreateEnhancedResult(reachableCandidate, roomState, 
+                        new List<string> { "Reachable via movement direction", $"Moved {_currentContext.LastDirection}" });
+                    return enhanced;
+                }
+                else
+                {
+                    _logger.LogWarning("Movement validation failed: no matching room reachable via {Direction} from {PreviousRoom} with name '{RoomName}'",
+                        _currentContext.LastDirection, _currentContext.PreviousRoomId, roomName);
+                }
+            }
+        }
+
+        // 3. Apply contextual scoring to disambiguate multiple matches (fallback)
         foreach (var candidate in nameMatches)
         {
             var (confidence, reasons) = CalculateContextualConfidence(candidate, roomState);
             candidates.Add((candidate, confidence, reasons));
         }
 
-        // 3. Select best candidate
+        // 4. Select best candidate
         var bestCandidate = candidates.OrderByDescending(c => c.confidence).FirstOrDefault();
         
         if (bestCandidate.confidence > 0.5)
@@ -256,12 +397,11 @@ public class RoomMatchingService
             // Store alternative candidates for debugging
             if (enhanced is EnhancedRoomMatchResult enhancedResult)
             {
-                enhancedResult.AlternativeCandidates = candidates
+                enhancedResult.AlternativeCandidates = [.. candidates
                     .Where(c => c.node.Id != bestCandidate.node.Id)
                     .OrderByDescending(c => c.confidence)
                     .Take(3)
-                    .Select(c => c.node)
-                    .ToList();
+                    .Select(c => c.node)];
             }
             
             return enhanced;
@@ -293,7 +433,7 @@ public class RoomMatchingService
             matches.AddRange(partialMatches);
         }
 
-        return matches.Distinct().ToList();
+        return [.. matches.Distinct()];
     }
 
     /// <summary>

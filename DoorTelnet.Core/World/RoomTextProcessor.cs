@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Linq;
 using System.Text;
 using System.Text.RegularExpressions;
@@ -18,6 +18,11 @@ public static class RoomTextProcessor
         false;
 #endif
 
+    // Stats pattern to detect and strip stats lines
+    private static readonly Regex StatsPattern = new(
+        @"\[Hp=\d+/Mp=\d+/Mv=\d+(?:/At=\d+)?(?:/Ac=\d+)?\]",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
     /// <summary>
     /// Enables or disables debug logging for room text processing
     /// </summary>
@@ -28,6 +33,7 @@ public static class RoomTextProcessor
 
     /// <summary>
     /// Clean room line content for processing
+    /// IMPORTANT: This now strips stats patterns while preserving room content
     /// </summary>
     public static string CleanLineContent(string line)
     {
@@ -41,12 +47,16 @@ public static class RoomTextProcessor
             LogRawInput(originalLine);
         }
 
+        // IMPORTANT: We do NOT strip stats patterns here because AddLine needs to detect 
+        // "[Hp=...] n" patterns for movement detection. Stats stripping is done later
+        // when building room content for parsing.
+        
         var cleanedLine = PerformTextCleaning(line);
 
         // Log cleaning if it was applied - only when enabled
         if (_enableDebugLogging && originalLine != cleanedLine && ShouldLogCleaning())
         {
-            System.Diagnostics.Debug.WriteLine("?? ROOM TEXT CLEANING APPLIED:");
+            System.Diagnostics.Debug.WriteLine("🧹 ROOM TEXT CLEANING APPLIED:");
             System.Diagnostics.Debug.WriteLine($"   RAW: '{originalLine}'");
             System.Diagnostics.Debug.WriteLine($"   CLEAN: '{cleanedLine}'");
         }
@@ -161,41 +171,23 @@ public static class RoomTextProcessor
 
     private static string PerformTextCleaning(string line)
     {
-        // Remove stats content from the line (TelnetClient should have done this, but safety net)
-        line = Regex.Replace(line, @"\[Hp=\d+/Mp=\d+/Mv=\d+(?:/At=\d+)?(?:/Ac=\d+)?\]", "", RegexOptions.IgnoreCase);
-
-        var (afterStrip, had) = StripLeadingPartialStats(line);
-        line = afterStrip;
-
-        if (had && string.IsNullOrWhiteSpace(line)) return string.Empty;
-
-        if (Regex.IsMatch(line, @"^(p=|Mp=|Mv=)\d+", RegexOptions.IgnoreCase)) return string.Empty;
-
-        var fragCount = Regex.Matches(line, @"(p=\d+|Mp=\d+|Mv=\d+)", RegexOptions.IgnoreCase).Count;
-        if (fragCount >= 3 && !line.Contains("[Hp=")) return string.Empty;
-
-        // TelnetClient should have already cleaned all ANSI sequences - this is just a safety net
+        // IMPORTANT CHANGE: Do NOT remove stats content here
+        // The stats line "[Hp=...] n" needs to stay intact for movement command detection in AddLine
+        // Stats will be stripped later when parsing room content
+        
+        // Just clean ANSI sequences (safety net - TelnetClient should handle this)
         var beforeBackupClean = line;
-
-        // Minimal backup ANSI cleaning (should not be needed with proper TelnetClient)
         line = Regex.Replace(line, @"\x1B\[[0-9;]*[A-Za-z@]", "", RegexOptions.IgnoreCase);
 
         // Log if we found ANSI content that TelnetClient missed (indicates a problem)
         if (_enableDebugLogging && beforeBackupClean != line && beforeBackupClean.Length > 0)
         {
-            System.Diagnostics.Debug.WriteLine($"?? BACKUP ANSI CLEANING TRIGGERED: '{beforeBackupClean}' -> '{line}' (TelnetClient should have handled this!)");
+            System.Diagnostics.Debug.WriteLine($"🧹 BACKUP ANSI CLEANING TRIGGERED: '{beforeBackupClean}' -> '{line}' (TelnetClient should have handled this!)");
         }
 
-        // Movement command filtering (TelnetClient should handle this, but safety net)
-        if (Regex.IsMatch(line, @"^\d*[A-Za-z]*[nsewud]$", RegexOptions.IgnoreCase))
-        {
-            if (_enableDebugLogging)
-            {
-                System.Diagnostics.Debug.WriteLine($"?? MOVEMENT FILTERED IN ROOMTRACKER: '{line}' (TelnetClient should have filtered this)");
-            }
-            return string.Empty;
-        }
-
+        // DO NOT filter movement commands here - they need to reach AddLine for detection
+        // Movement filtering happens later in room content parsing
+        
         // Basic character sanitization
         var sb = new StringBuilder();
         foreach (var c in line)
@@ -212,16 +204,7 @@ public static class RoomTextProcessor
 
         var result = Regex.Replace(sb.ToString(), @"\s+", " ").Trim();
 
-        // Final length check
-        if (result.Length < 2)
-        {
-            if (_enableDebugLogging && line != result && line.Length > 2)
-            {
-                System.Diagnostics.Debug.WriteLine($"?? FILTERED TOO SHORT: '{result}' (from original: '{line}')");
-            }
-            return string.Empty;
-        }
-
+        // Don't filter short lines here - let AddLine handle it
         return result;
     }
 
@@ -285,7 +268,7 @@ public static class RoomTextProcessor
         if (line.Contains("p=") && line.Contains("Mp=") && line.Contains("Mv=") && !line.Contains("[Hp=")) return true;
 
         // Movement commands (should be filtered by TelnetClient, but keep as safety net)
-        if (Regex.IsMatch(line, @"^\d*[A-Za-z]*[nsewud]$", RegexOptions.IgnoreCase)) return true;
+        if (Regex.IsMatch(line, @"^\d*[A-Za-z]*[nsewud|ne|nw|se|sw|up|down]$", RegexOptions.IgnoreCase)) return true;
 
         // System/connection messages
         if (line.StartsWith("}")

@@ -11,6 +11,12 @@ public record MonsterInfo(string Name, string Disposition, bool TargetingYou, in
 public class RoomState
 {
     public string Name { get; set; } = string.Empty;
+    
+    /// <summary>
+    /// Graph node ID for this room (if matched/known)
+    /// </summary>
+    public string? RoomId { get; set; }
+    
     public List<string> Exits { get; set; } = new();
     public List<MonsterInfo> Monsters { get; set; } = new();
     public List<string> Items { get; set; } = new();
